@@ -1,4 +1,4 @@
-package orus
+package main
 
 import "time"
 
