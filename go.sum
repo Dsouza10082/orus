@@ -2,6 +2,10 @@ github.com/Dsouza10082/ConcurrentOrderedMap v1.1.0 h1:vwWhkybibXPf+DIzabxGCeUJhW
 github.com/Dsouza10082/ConcurrentOrderedMap v1.1.0/go.mod h1:9tkK81q9alPuIQavnf95hkOIHCFMGKxb37truG5kYfs=
 github.com/Dsouza10082/go-bge-m3-embed v0.4.1 h1:DLVbpJe6uIRVXpwT4zt0/Zdhve1U55YJOCvYANDh8rE=
 github.com/Dsouza10082/go-bge-m3-embed v0.4.1/go.mod h1:9pFYIfh8ftJPFXzmrIy7B2HlA933S53RC3baWynFsT8=
+github.com/Dsouza10082/go-bge-m3-embed v0.4.2 h1:t1B6fqXneaBfnL1i1pyYu/93FlTURapCxBCFpxXVrP8=
+github.com/Dsouza10082/go-bge-m3-embed v0.4.2/go.mod h1:9pFYIfh8ftJPFXzmrIy7B2HlA933S53RC3baWynFsT8=
+github.com/Dsouza10082/go-bge-m3-embed v0.4.3 h1:kN5uad3g5hQpeMS+Q64vztaXCZ6s1PbgbEqI+ruXsAY=
+github.com/Dsouza10082/go-bge-m3-embed v0.4.3/go.mod h1:9pFYIfh8ftJPFXzmrIy7B2HlA933S53RC3baWynFsT8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/emirpasic/gods v1.18.1 h1:FXtiHYKDGKCW2KzwZKx0iC0PQmdlorYgdFG9jPXJ1Bc=

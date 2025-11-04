@@ -1,4 +1,4 @@
-package orus
+package main
 
 import (
 	"bytes"
@@ -12,6 +12,13 @@ import (
 type OllamaClient struct {
 	baseURL    string
 	httpClient *http.Client
+}
+
+type PullModelProgress struct {
+	Status    string `json:"status"`
+	Digest    string `json:"digest,omitempty"`
+	Total     int64  `json:"total,omitempty"`
+	Completed int64  `json:"completed,omitempty"`
 }
 
 func NewOllamaClient(baseURL string) *OllamaClient {
@@ -71,7 +78,6 @@ func (c *OllamaClient) Generate(req GenerateRequest) (*GenerateResponse, error) 
 
 func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 	url := fmt.Sprintf("%s/api/chat", c.baseURL)
-	
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("error serializing request: %w", err)
@@ -88,16 +94,13 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("error making request: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("error from Ollama (status %d): %s", resp.StatusCode, string(body))
 	}
-
 	decoder := json.NewDecoder(resp.Body)
 	var finalResponse ChatResponse
 	var fullContent string
-	
 	for decoder.More() {
 		var chatResp ChatResponse
 		if err := decoder.Decode(&chatResp); err != nil {
@@ -113,9 +116,7 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 			break
 		}
 	}
-	
 	finalResponse.Message.Content = fullContent
-
 	return &finalResponse, nil
 }
 
@@ -188,4 +189,48 @@ func (c *OllamaClient) ListModels() ([]string, error) {
 	}
 
 	return models, nil
+}
+
+func (c *OllamaClient) PullModel(modelName string, progressCallback func(PullModelProgress)) error {
+	url := fmt.Sprintf("%s/api/pull", c.baseURL)
+
+	reqData := map[string]interface{}{
+		"name":   modelName,
+		"stream": true,
+	}
+
+	jsonData, _ := json.Marshal(reqData)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("erro do servidor: status %d", resp.StatusCode)
+	}
+
+	decoder := json.NewDecoder(resp.Body)
+	for decoder.More() {
+		var progress PullModelProgress
+		if err := decoder.Decode(&progress); err != nil {
+			return err
+		}
+
+		if progressCallback != nil {
+			progressCallback(progress)
+		}
+
+		if progress.Status == "success" {
+			break
+		}
+	}
+
+	return nil
 }
