@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -365,62 +366,86 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 	response := NewOrusResponse()
 	request := new(OrusRequest)
 	json.Unmarshal(body, request)
-	respChan := make(chan *OrusResponse)
-	ctx, cancel := context.WithTimeout(context.Background(), 540*time.Second)
-	defer cancel()
-	go func() {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			model := request.Body["model"].(string)
-			messagesRaw := request.Body["messages"]
-			messagesJSON, _ := json.Marshal(messagesRaw)
-			var messages []Message
-			if err := json.Unmarshal(messagesJSON, &messages); err != nil {
-				response.Error = err.Error()
-				response.Message = "Error unmarshalling messages"
-				response.Success = false
-				response.TimeTaken = time.Since(startTime)
-				respChan <- response
-				return
-			}
-			stream := request.Body["stream"].(bool)
-			responseLLM, err := s.OllamaClient.Chat(ChatRequest{
-				Model: model,
-				Messages: messages,
-				Stream: stream,
-			})
-			if err != nil {
-				response.Error = err.Error()
-				response.Message = "Error calling LLM"
-				response.Success = false
-				response.TimeTaken = time.Since(startTime)
-				respChan <- response
-			} else {
-				response.Data = map[string]interface{}{
-					"response": responseLLM.Message.Content,
-					"model": model,
-					"messages": messages,
-					"stream": stream,
-				}
-				response.Success = true
-				response.TimeTaken = time.Since(startTime)
-				response.Message = "LLM request received successfully"
-				respChan <- response
-			}
-		}
-	}()
-	select {
-	case response := <-respChan:
-		respondJSON(w, http.StatusOK, response)
-	case <-ctx.Done():
-		response.Error = "Error Timeout"
+	
+	model := request.Body["model"].(string)
+	messagesRaw := request.Body["messages"]
+	messagesJSON, _ := json.Marshal(messagesRaw)
+	var messages []Message
+	if err := json.Unmarshal(messagesJSON, &messages); err != nil {
+		response.Error = err.Error()
+		response.Message = "Error unmarshalling messages"
 		response.Success = false
 		response.TimeTaken = time.Since(startTime)
-		response.Message = "Error Timeout"
-		respondJSON(w, http.StatusInternalServerError, response)
+		respondJSON(w, http.StatusBadRequest, response)
 	}
+	stream := request.Body["stream"].(bool)
+
+	if stream {
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+        
+		content := make([]string, 0)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			respondError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
+			return
+		}
+		flusher.Flush()
+		chatStreamProgressCallback := func(chatResp ChatStreamResponse) {
+			data, _ := json.Marshal(chatResp)
+			fmt.Fprintf(w, "data: %s\n\n", string(data))
+			flusher.Flush()
+			content = append(content, chatResp.Message.Content)
+		}
+		err := s.OllamaClient.ChatStream(ChatRequest{
+			Model: model,
+			Messages: messages,
+			Stream: stream,
+		}, chatStreamProgressCallback)
+		if err != nil {
+			errorData, _ := json.Marshal(map[string]string{
+				"status": "error",
+				"error":  err.Error(),
+			})
+			fmt.Fprintf(w, "data: %s\n\n", string(errorData))
+			flusher.Flush()
+			return
+		}
+		successData, _ := json.Marshal(map[string]string{
+			"status": "success",
+			"message": "LLM request received successfully",
+			"content": strings.Join(content, ""),
+		})
+		fmt.Fprintf(w, "data: %s\n\n", string(successData))
+		flusher.Flush()
+		return
+	} else {
+		responseLLM, err := s.OllamaClient.Chat(ChatRequest{
+			Model: model,
+			Messages: messages,
+			Stream: stream,
+		})
+		if err != nil {
+			response.Error = err.Error()
+			response.Message = "Error calling LLM"
+			response.Success = false
+			response.TimeTaken = time.Since(startTime)
+			respondJSON(w, http.StatusInternalServerError, response)
+		} else {
+			response.Data = map[string]interface{}{
+				"response": responseLLM.Message.Content,
+				"model": model,
+				"messages": messages,
+				"stream": stream,
+			}
+			response.Success = true
+			response.TimeTaken = time.Since(startTime)
+			response.Message = "LLM request received successfully"
+			respondJSON(w, http.StatusOK, response)
+		}
+	}			
 }
 
 // ---------------------------MAIN FUNCTION------------------------------

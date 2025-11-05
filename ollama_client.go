@@ -21,18 +21,28 @@ type PullModelProgress struct {
 	Completed int64  `json:"completed,omitempty"`
 }
 
+type ChatStreamResponse struct {
+	Model     string    `json:"model"`
+	Message   Message   `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+	Done      bool      `json:"done"`
+	Progress  int       `json:"progress"`
+	Total     int64     `json:"total,omitempty"`
+	Completed int64     `json:"completed,omitempty"`
+}
+
 func NewOllamaClient(baseURL string) *OllamaClient {
 	return &OllamaClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 300 * time.Second,
+			Timeout: 2000 * time.Second,
 		},
 	}
 }
 
 func (c *OllamaClient) Generate(req GenerateRequest) (*GenerateResponse, error) {
 	url := fmt.Sprintf("%s/api/generate", c.baseURL)
-	
+
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("error serializing request: %w", err)
@@ -57,7 +67,7 @@ func (c *OllamaClient) Generate(req GenerateRequest) (*GenerateResponse, error) 
 
 	decoder := json.NewDecoder(resp.Body)
 	var finalResponse GenerateResponse
-	
+
 	for decoder.More() {
 		var genResp GenerateResponse
 		if err := decoder.Decode(&genResp); err != nil {
@@ -67,7 +77,7 @@ func (c *OllamaClient) Generate(req GenerateRequest) (*GenerateResponse, error) 
 		finalResponse.Model = genResp.Model
 		finalResponse.CreatedAt = genResp.CreatedAt
 		finalResponse.Done = genResp.Done
-		
+
 		if genResp.Done {
 			break
 		}
@@ -111,7 +121,7 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 		finalResponse.CreatedAt = chatResp.CreatedAt
 		finalResponse.Done = chatResp.Done
 		finalResponse.Message.Role = chatResp.Message.Role
-		
+
 		if chatResp.Done {
 			break
 		}
@@ -120,15 +130,56 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 	return &finalResponse, nil
 }
 
+func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse))  error {
+	req.Stream = true
+	url := fmt.Sprintf("%s/api/chat", c.baseURL)
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("error serializing request: %w", err)
+	}
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("error making request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("error from Ollama (status %d): %s", resp.StatusCode, string(body))
+	}
+	decoder := json.NewDecoder(resp.Body)
+	for decoder.More() {
+		var chatResp ChatStreamResponse
+		var fullContent string
+		if err := decoder.Decode(&chatResp); err != nil {
+			return fmt.Errorf("error decoding response: %w", err)
+		}
+		fullContent += chatResp.Message.Content
+		chatResp.Message.Content = fullContent
+		chatResp.Model = req.Model
+		chatResp.CreatedAt = time.Now()
+		chatStreamProgressCallback(chatResp)
+		if chatResp.Done {
+			break
+		}
+	}
+	return  nil
+}
+
 // GetEmbedding obtém embeddings de um texto
 func (c *OllamaClient) GetEmbedding(model, text string) ([]float64, error) {
 	url := fmt.Sprintf("%s/api/embeddings", c.baseURL)
-	
+
 	reqData := map[string]string{
 		"model":  model,
 		"prompt": text,
 	}
-	
+
 	jsonData, err := json.Marshal(reqData)
 	if err != nil {
 		return nil, fmt.Errorf("error serializing request: %w", err)
@@ -162,7 +213,7 @@ func (c *OllamaClient) GetEmbedding(model, text string) ([]float64, error) {
 // ListModels lista modelos disponíveis
 func (c *OllamaClient) ListModels() ([]string, error) {
 	url := fmt.Sprintf("%s/api/tags", c.baseURL)
-	
+
 	resp, err := c.httpClient.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %w", err)
@@ -178,7 +229,7 @@ func (c *OllamaClient) ListModels() ([]string, error) {
 			Name string `json:"name"`
 		} `json:"models"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
