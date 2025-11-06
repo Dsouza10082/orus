@@ -1,0 +1,183 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "contact": {}
+    },
+    "paths": {
+        "/orus-api/v1/call-llm": {
+            "post": {
+                "description": "Calls the LLM using the Ollama client",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "llm"
+                ],
+                "summary": "Calls the LLM using the Ollama client",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orus-api/v1/embed-text": {
+            "post": {
+                "description": "Embeds text using the BGE-M3 or Ollama embedding model",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "embed"
+                ],
+                "summary": "Embeds text using the BGE-M3 or Ollama embedding model",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orus-api/v1/ollama-model-list": {
+            "get": {
+                "description": "Returns the list of models available in the Ollama server",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ollama"
+                ],
+                "summary": "Returns the list of models available in the Ollama server",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orus-api/v1/ollama-pull-model": {
+            "post": {
+                "description": "Pulls a model from the Ollama server",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ollama"
+                ],
+                "summary": "Pulls a model from the Ollama server",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/orus-api/v1/system-info": {
+            "get": {
+                "description": "Returns the system information",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Returns the system information",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/main.OrusResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "main.OrusResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object"
+                },
+                "error": {
+                    "type": "string",
+                    "example": "Error message"
+                },
+                "message": {
+                    "type": "string",
+                    "example": "Request received successfully"
+                },
+                "serial": {
+                    "type": "string",
+                    "example": "123e4567-e89b-12d3-a456-426614174000"
+                },
+                "success": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "time_taken": {
+                    "type": "integer",
+                    "example": 1500
+                }
+            }
+        }
+    }
+}

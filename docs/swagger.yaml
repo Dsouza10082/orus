@@ -1,0 +1,120 @@
+definitions:
+  main.OrusResponse:
+    properties:
+      data:
+        type: object
+      error:
+        example: Error message
+        type: string
+      message:
+        example: Request received successfully
+        type: string
+      serial:
+        example: 123e4567-e89b-12d3-a456-426614174000
+        type: string
+      success:
+        example: true
+        type: boolean
+      time_taken:
+        example: 1500
+        type: integer
+    type: object
+info:
+  contact: {}
+paths:
+  /orus-api/v1/call-llm:
+    post:
+      consumes:
+      - application/json
+      description: Calls the LLM using the Ollama client
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+      summary: Calls the LLM using the Ollama client
+      tags:
+      - llm
+  /orus-api/v1/embed-text:
+    post:
+      consumes:
+      - application/json
+      description: Embeds text using the BGE-M3 or Ollama embedding model
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+      summary: Embeds text using the BGE-M3 or Ollama embedding model
+      tags:
+      - embed
+  /orus-api/v1/ollama-model-list:
+    get:
+      consumes:
+      - application/json
+      description: Returns the list of models available in the Ollama server
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+      summary: Returns the list of models available in the Ollama server
+      tags:
+      - ollama
+  /orus-api/v1/ollama-pull-model:
+    post:
+      consumes:
+      - application/json
+      description: Pulls a model from the Ollama server
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+      summary: Pulls a model from the Ollama server
+      tags:
+      - ollama
+  /orus-api/v1/system-info:
+    get:
+      consumes:
+      - application/json
+      description: Returns the system information
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/main.OrusResponse'
+      summary: Returns the system information
+      tags:
+      - system
+swagger: "2.0"
