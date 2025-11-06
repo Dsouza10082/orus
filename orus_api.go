@@ -28,13 +28,15 @@ func NewOrusAPI() *OrusAPI {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.StripSlashes)
 	router.Use(middleware.URLFormat)
+
 	return &OrusAPI{
 		Orus:    NewOrus(),
 		Port:    LoadEnv("ORUS_API_PORT"),
-		router:  chi.NewRouter(),
+		router:  router,
 		Verbose: false,
 	}
 }
+
 
 func (s *OrusAPI) setupRoutes() {
 	s.router.Get("/orus-api/v1/system-info", s.GetSystemInfo)
