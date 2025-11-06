@@ -9,9 +9,14 @@ import (
 	"strings"
 	"time"
 
+	view "github.com/Dsouza10082/orus/view"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/starfederation/datastar-go/datastar"
+	 httpSwagger "github.com/swaggo/http-swagger"
+
+	_ "github.com/Dsouza10082/orus/docs"
 )
 
 type OrusAPI struct {
@@ -19,6 +24,14 @@ type OrusAPI struct {
 	Port    string
 	router  *chi.Mux
 	Verbose bool
+}
+
+type PromptSignals struct {
+    Prompt        string `json:"prompt"`
+    Model         string `json:"model"`
+    OperationType string `json:"operationType"`
+    ResponseMode  string `json:"responseMode"`
+    Result        string `json:"result"`
 }
 
 func NewOrusAPI() *OrusAPI {
@@ -36,14 +49,116 @@ func NewOrusAPI() *OrusAPI {
 	}
 }
 
+
+
 func (s *OrusAPI) setupRoutes() {
 	s.router.Get("/orus-api/v1/system-info", s.GetSystemInfo)
 	s.router.Post("/orus-api/v1/embed-text", s.EmbedText)
 	s.router.Get("/orus-api/v1/ollama-model-list", s.OllamaModelList)
 	s.router.Post("/orus-api/v1/ollama-pull-model", s.OllamaPullModel)
 	s.router.Post("/orus-api/v1/call-llm", s.CallLLM)
+	s.router.Get("/prompt", s.IndexHandler)
+	s.router.Post("/prompt/llm-stream", s.PromptLLMStream)
+
+	s.router.Get("/swagger/*", httpSwagger.Handler(
+        httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
+    ))
+	
+	s.router.Get("/swagger/doc.json", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "docs/swagger.json")
+	})
 }
 
+// IndexHandler is a handler for the prompt endpoint
+// It renders the index.html file
+func (s *OrusAPI) IndexHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	indexView := view.NewView()
+	indexView.RenderIndex(w)
+}
+
+// PromptLLMStream is a handler for the prompt/llm-stream endpoint
+// It reads the signals from the request and sends them to the LLM
+// It then streams the response back to the client
+func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
+
+	signals := &PromptSignals{}
+	if err := datastar.ReadSignals(r, signals); err != nil {
+		log.Printf("PromptLLMStream: failed to read signals: %v", err)
+		http.Error(w, "failed to read signals", http.StatusBadRequest)
+		return
+	}
+
+	if signals.Model == "" {
+		signals.Model = "llama-3"
+	}
+	if signals.ResponseMode == "" {
+		signals.ResponseMode = "stream"
+	}
+
+	sse := datastar.NewSSE(w, r)
+	defer func() {
+		_ = sse.ConsoleLog("PromptLLMStream closed")
+	}()
+
+	signals.Result = ""
+	if err := sse.MarshalAndPatchSignals(signals); err != nil {
+		_ = sse.ConsoleError(fmt.Errorf("failed to clear result: %w", err))
+		return
+	}
+
+	messages := []Message{
+		{
+			Role:    "user",
+			Content: signals.Prompt,
+		},
+	}
+
+	if signals.ResponseMode == "single" {
+		resp, err := s.OllamaClient.Chat(ChatRequest{
+			Model:    signals.Model,
+			Messages: messages,
+			Stream:   false,
+		})
+		if err != nil {
+			_ = sse.ConsoleError(fmt.Errorf("LLM error: %w", err))
+			return
+		}
+
+		signals.Result = resp.Message.Content
+		if err := sse.MarshalAndPatchSignals(signals); err != nil {
+			_ = sse.ConsoleError(fmt.Errorf("failed to patch signals: %w", err))
+		}
+		return
+	}
+
+	err := s.OllamaClient.ChatStream(ChatRequest{
+		Model:    signals.Model,
+		Messages: messages,
+		Stream:   true,
+	}, func(chunk ChatStreamResponse) {
+		if sse.IsClosed() {
+			return
+		}
+		if chunk.Message.Content == "" {
+			return
+		}
+
+		signals.Result += chunk.Message.Content
+
+		if err := sse.MarshalAndPatchSignals(signals); err != nil {
+			_ = sse.ConsoleError(fmt.Errorf("failed to patch signals: %w", err))
+		}
+	})
+
+	if err != nil {
+		_ = sse.ConsoleError(fmt.Errorf("ChatStream error: %w", err))
+		return
+	}
+}
+
+// Start is a function that starts the Orus API server
+// It sets up the routes and starts the server
 func (s *OrusAPI) Start() {
 	s.setupRoutes()
 	log.Println("Orus API ORUS_API_AGENT_MEMORY_PATH", LoadEnv("ORUS_API_AGENT_MEMORY_PATH"))
@@ -58,11 +173,22 @@ func (s *OrusAPI) Start() {
 	}
 }
 
+// SetVerbose is a function that sets the verbose mode
+// It returns the OrusAPI instance
 func (s *OrusAPI) SetVerbose(verbose bool) *OrusAPI {
 	s.Verbose = verbose
 	return s
 }
 
+// GetUsers godoc
+// @Summary      Returns the system information
+// @Description  Returns the system information
+// @Tags         system
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  OrusResponse
+// @Failure      500  {object}  OrusResponse
+// @Router       /orus-api/v1/system-info [get]
 func (s *OrusAPI) GetSystemInfo(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	response := OrusResponse{
@@ -82,6 +208,8 @@ func (s *OrusAPI) GetSystemInfo(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, response)
 }
 
+// decodeJSONBody is a function that decodes the JSON body of the request
+// It returns true if the body is decoded successfully, false otherwise
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) bool {
 	defer r.Body.Close()
 
@@ -96,6 +224,16 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes in
 	return true
 }
 
+
+// EmbedText godoc
+// @Summary      Embeds text using the BGE-M3 or Ollama embedding model
+// @Description  Embeds text using the BGE-M3 or Ollama embedding model
+// @Tags         embed
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  OrusResponse
+// @Failure      500  {object}  OrusResponse
+// @Router       /orus-api/v1/embed-text [post]
 func (s *OrusAPI) EmbedText(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
@@ -152,6 +290,16 @@ func (s *OrusAPI) EmbedText(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+
+// OllamaModelList godoc
+// @Summary      Returns the list of models available in the Ollama server
+// @Description  Returns the list of models available in the Ollama server
+// @Tags         ollama
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  OrusResponse
+// @Failure      500  {object}  OrusResponse
+// @Router       /orus-api/v1/ollama-model-list [get]
 func (s *OrusAPI) OllamaModelList(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	models, err := s.OllamaClient.ListModels()
@@ -169,6 +317,15 @@ func (s *OrusAPI) OllamaModelList(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, response)
 }
 
+// OllamaPullModel godoc
+// @Summary      Pulls a model from the Ollama server
+// @Description  Pulls a model from the Ollama server
+// @Tags         ollama
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  OrusResponse
+// @Failure      500  {object}  OrusResponse
+// @Router       /orus-api/v1/ollama-pull-model [post]
 func (s *OrusAPI) OllamaPullModel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
@@ -198,12 +355,10 @@ func (s *OrusAPI) OllamaPullModel(w http.ResponseWriter, r *http.Request) {
 	progressCallback := func(progress PullModelProgress) {
 		select {
 		case <-ctx.Done():
-			// cliente desconectou / request cancelada
 			return
 		default:
 			data, _ := json.Marshal(progress)
 			if _, err := fmt.Fprintf(w, "data: %s\n\n", string(data)); err != nil {
-				// erro de escrita, provavelmente cliente fechou
 				return
 			}
 			flusher.Flush()
@@ -290,6 +445,15 @@ func (s *OrusAPI) embedText(model string, text string, startTime time.Time) *Oru
 	return resp
 }
 
+// CallLLM godoc
+// @Summary      Calls the LLM using the Ollama client
+// @Description  Calls the LLM using the Ollama client
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  OrusResponse
+// @Failure      500  {object}  OrusResponse
+// @Router       /orus-api/v1/call-llm [post]
 func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now()

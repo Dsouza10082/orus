@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Orus Prompt Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Tailwind via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Datastar (client) -->
+  <script
+    type="module"
+    src="https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.0-RC.6/bundles/datastar.js">
+  </script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-sky-50 via-slate-50 to-emerald-50 flex items-center justify-center text-slate-800">
+
+  <!-- Light background decor -->
+  <div class="fixed inset-0 overflow-hidden pointer-events-none">
+    <div class="absolute -top-32 -left-10 w-72 h-72 bg-emerald-200/60 rounded-full blur-3xl"></div>
+    <div class="absolute bottom-0 right-0 w-96 h-96 bg-sky-200/60 rounded-full blur-3xl"></div>
+    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 h-80 bg-white/70 rounded-full blur-3xl"></div>
+  </div>
+
+  <!-- Main card with Datastar signals -->
+  <div class="relative z-10 w-full max-w-3xl px-4">
+    <div
+      id="prompt-console"
+      class="bg-white/70 border border-white/80 backdrop-blur-2xl rounded-3xl shadow-xl shadow-slate-200 px-8 py-7 md:px-10 md:py-8"
+      data-signals='{
+        "prompt": "",
+        "model": "llama3.1:8b",
+        "operationType": "qa-llm",
+        "responseMode": "stream",
+        "result": ""
+      }'
+    >
+
+      <!-- RESULT BOX (TOP) -->
+      <div class="mb-6 space-y-2">
+        <div class="flex items-center justify-between">
+          <label class="block text-xs font-medium tracking-wide text-slate-600 uppercase">
+            Result (Markdown)
+          </label>
+          <span class="text-[11px] text-slate-400">
+            Orus API - LLM Prompt Console v1.0.5
+          </span>
+        </div>
+
+        <div class="flex rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-xl overflow-hidden max-h-72">
+          <div class="w-1 bg-slate-200"></div>
+
+          <pre class="flex-1 px-4 py-3 font-mono text-xs md:text-sm text-slate-800 whitespace-pre-wrap overflow-auto">
+           <code data-text="$result"></code><span class="ml-0.5 opacity-70 animate-pulse">▌</span>
+          </pre>
+        </div>
+      </div>
+
+      <!-- Header -->
+      <div class="flex flex-col gap-2 mb-6">
+        <div class="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-slate-500">
+          <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+          Orus API - LLM Prompt Console
+        </div>
+      </div>
+
+      <form
+        class="space-y-6"
+        data-on:submit__prevent="@post('/prompt/llm-stream')">
+        <!-- Prompt / Search box -->
+        <div class="space-y-2">
+          <label for="prompt" class="block text-xs font-medium tracking-wide text-slate-600 uppercase">
+            Prompt / Search
+          </label>
+          <div
+            class="relative group rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-xl focus-within:border-emerald-400/80 focus-within:bg-white transition-all">
+            <!-- Search icon -->
+            <span class="pointer-events-none absolute left-3 top-3.5 md:top-3 text-slate-400">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 md:h-5 md:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                  d="m21 21-4.35-4.35M11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14z" />
+              </svg>
+            </span>
+            <textarea
+              id="prompt"
+              name="prompt"
+              rows="3"
+              data-bind:prompt
+              class="w-full bg-transparent border-0 text-sm md:text-base text-slate-800 placeholder:text-slate-400 focus:ring-0 focus:outline-none resize-none py-3.5 pl-10 pr-3 md:py-3 md:pl-11 md:pr-4"
+              placeholder="Describe what you want the model to do or search for..."
+            ></textarea>
+          </div>
+        </div>
+
+        <!-- 3 dropdowns row -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5">
+          <!-- LLM Model -->
+          <div class="space-y-1.5">
+            <label for="llm-model" class="block text-xs font-medium tracking-wide text-slate-600 uppercase">
+              LLM Model
+            </label>
+            <div
+              class="relative rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-xl px-3 py-2.5 flex items-center gap-2 focus-within:border-emerald-400/80 focus-within:bg-white transition-all">
+              <span class="text-slate-500 text-xs md:text-sm">🧠</span>
+              <select
+                id="llm-model"
+                name="model"
+                data-bind:model
+                class="w-full bg-transparent border-0 text-xs md:text-sm text-slate-800 focus:ring-0 focus:outline-none pr-5 appearance-none">
+                <option class="bg-white" value="llama3.1:8b">(llm) - llama3.1:8b</option>
+                <option class="bg-white" value="bge-m3">(embedding) - bge-m3</option>
+                <option class="bg-white" value="nomic-embed-text">(embedding) - nomic-embed-text</option>
+              </select>
+              <span class="pointer-events-none absolute right-3 text-slate-400 text-xs">
+                ▼
+              </span>
+            </div>
+          </div>
+
+          <!-- Operation Type -->
+          <div class="space-y-1.5">
+            <label for="operation-type" class="block text-xs font-medium tracking-wide text-slate-600 uppercase">
+              Operation Type
+            </label>
+            <div
+              class="relative rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-xl px-3 py-2.5 flex items-center gap-2 focus-within:border-emerald-400/80 focus-within:bg-white transition-all">
+              <span class="text-slate-500 text-xs md:text-sm">🧩</span>
+              <select
+                id="operation-type"
+                name="operationType"
+                data-bind:operationType
+                class="w-full bg-transparent border-0 text-xs md:text-sm text-slate-800 focus:ring-0 focus:outline-none pr-5 appearance-none">
+                <option class="bg-white" value="embedding">
+                  String embeddings
+                </option>
+                <option class="bg-white" value="qa-llm">
+                  LLM question answering
+                </option>
+              </select>
+              <span class="pointer-events-none absolute right-3 text-slate-400 text-xs">
+                ▼
+              </span>
+            </div>
+          </div>
+
+          <!-- Response Mode (stream or not) -->
+          <div class="space-y-1.5">
+            <label for="response-mode" class="block text-xs font-medium tracking-wide text-slate-600 uppercase">
+              Response Mode
+            </label>
+            <div
+              class="relative rounded-2xl border border-slate-200 bg-white/80 backdrop-blur-xl px-3 py-2.5 flex items-center gap-2 focus-within:border-emerald-400/80 focus-within:bg-white transition-all">
+              <span class="text-slate-500 text-xs md:text-sm">🌊</span>
+              <select
+                id="response-mode"
+                name="responseMode"
+                data-bind:responseMode
+                class="w-full bg-transparent border-0 text-xs md:text-sm text-slate-800 focus:ring-0 focus:outline-none pr-5 appearance-none">
+                <option class="bg-white" value="stream">
+                  Stream (tokens in real time)
+                </option>
+                <option class="bg-white" value="single">
+                  Single response (blocking)
+                </option>
+              </select>
+              <span class="pointer-events-none absolute right-3 text-slate-400 text-xs">
+                ▼
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer: button + info -->
+        <div class="flex flex-col md:flex-row md:items-center gap-3 pt-2">
+          <button
+            type="submit"
+            class="inline-flex items-center justify-center px-6 py-2.5 rounded-full text-sm font-medium text-white bg-gradient-to-r from-emerald-400 to-emerald-500 shadow-lg shadow-emerald-200 hover:brightness-110 active:scale-[0.98] transition-all">
+            <span>Run request</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>
