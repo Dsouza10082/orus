@@ -59,8 +59,6 @@ func NewOrusAPI() *OrusAPI {
 	}
 }
 
-
-
 func (s *OrusAPI) setupRoutes() {
 	s.router.Get("/orus-api/v1/system-info", s.GetSystemInfo)
 	s.router.Post("/orus-api/v1/embed-text", s.EmbedText)
