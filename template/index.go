@@ -1,4 +1,4 @@
-package view
+package template
 
 import (
 	_ "embed"
@@ -10,8 +10,8 @@ import (
 var indexHTML string
 
 type View struct {
-   models []string
-   optionsHtml string
+	models      []string
+	optionsHtml string
 }
 
 func NewView() *View {

@@ -6,18 +6,94 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	view "github.com/Dsouza10082/orus/view"
+	"github.com/Dsouza10082/orus/config"
+	"github.com/Dsouza10082/orus/internal/service"
+	view "github.com/Dsouza10082/orus/template"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/starfederation/datastar-go/datastar"
-	 httpSwagger "github.com/swaggo/http-swagger"
+	httpSwagger "github.com/swaggo/http-swagger"
 
+	bge_m3 "github.com/Dsouza10082/go-bge-m3-embed"
 	_ "github.com/Dsouza10082/orus/docs"
+	"github.com/Dsouza10082/orus/internal/model"
 )
+
+type Orus struct {
+	BGEM3Embedder *bge_m3.GolangBGE3M3Embedder
+	OrusAPI       *OrusAPI
+	OllamaClient  *service.OllamaClient
+	params        *config.Parameters
+}
+
+func NewOrus() *Orus {
+	params := config.GetParameters()
+	bge_m3_embedder := bge_m3.NewGolangBGE3M3Embedder().
+		SetMemoryPath(params.AgentMemoryPath).
+		SetTokPath(params.TokPath).
+		SetOnnxPath(params.OnnxPath).
+		SetRuntimePath(params.OnnxRuntimePath)
+	bge_m3_embedder.EmbeddingModel.SetOnnxModelPath(params.OnnxPath)
+	bge_m3_embedder.Verbose = true
+	ollamaClient := service.NewOllamaClient(params.OllamaBaseURL)
+	return &Orus{
+		BGEM3Embedder: bge_m3_embedder,
+		OllamaClient:  ollamaClient,
+		params:        params,
+	}
+}
+
+func (s *Orus) EmbedWithBGE_M3(text string) ([]float32, error) {
+	vector, err := s.BGEM3Embedder.Embed(text)
+	if err != nil {
+		log.Println("Error embedding text: ", err)
+		return nil, err
+	}
+	return vector, nil
+}
+
+func (s *Orus) EmbedWithOllama(text string) ([]float64, error) {
+	vector, err := s.OllamaClient.GetEmbedding("nomic-embed-text", text)
+	if err != nil {
+		log.Println("Error embedding text: ", err)
+		return nil, err
+	}
+	return vector, nil
+}
+
+func (s *Orus) CallLLM(llmModel string, messages []model.Message, stream bool) (string, error) {
+	response, err := s.OllamaClient.Chat(model.ChatRequest{
+		Model:    llmModel,
+		Messages: messages,
+		Stream:   stream,
+	})
+	if err != nil {
+		log.Println("Error chatting: ", err)
+		return "", err
+	}
+	return response.Message.Content, nil
+}
+
+func (s *Orus) PullLLMModel(llmModel string) (string, error) {
+
+	progressCallback := func(progress model.PullModelProgress) {
+		data, _ := json.Marshal(progress)
+		fmt.Println(string(data))
+	}
+
+	err := s.OllamaClient.PullModel(llmModel, progressCallback)
+	if err != nil {
+		return "Error pulling model: " + err.Error(), err
+	}
+
+	return "Model pulled successfully", nil
+}
 
 type OrusAPI struct {
 	*Orus
@@ -25,24 +101,27 @@ type OrusAPI struct {
 	router  *chi.Mux
 	Verbose bool
 	server  *http.Server
+	params  *config.Parameters
 }
 
 type PromptSignals struct {
-    Prompt        string `json:"prompt"`
-    Model         string `json:"model"`
-    OperationType string `json:"operationType"`
-    ResponseMode  string `json:"responseMode"`
-    Result        string `json:"result"`
+	Prompt        string `json:"prompt"`
+	Model         string `json:"model"`
+	OperationType string `json:"operationType"`
+	ResponseMode  string `json:"responseMode"`
+	Result        string `json:"result"`
 }
 
 func NewOrusAPI() *OrusAPI {
+	params := config.GetParameters()
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.StripSlashes)
 	router.Use(middleware.URLFormat)
+	router.Handle("/*", FileServerWithFallback("../../static"))
 	server := &http.Server{
-		Addr:              ":" + LoadEnv("ORUS_API_PORT"),
+		Addr:              ":" + params.OrusAPIPort,
 		Handler:           router,
 		ReadTimeout:       0,
 		WriteTimeout:      0,
@@ -52,10 +131,11 @@ func NewOrusAPI() *OrusAPI {
 	}
 	return &OrusAPI{
 		Orus:    NewOrus(),
-		Port:    LoadEnv("ORUS_API_PORT"),
+		Port:    params.OrusAPIPort,
 		router:  router,
 		Verbose: false,
 		server:  server,
+		params:  params,
 	}
 }
 
@@ -69,9 +149,9 @@ func (s *OrusAPI) setupRoutes() {
 	s.router.Post("/prompt/llm-stream", s.PromptLLMStream)
 
 	s.router.Get("/swagger/*", httpSwagger.Handler(
-        httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
-    ))
-	
+		httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
+	))
+
 	s.router.Get("/swagger/doc.json", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "docs/swagger.json")
 	})
@@ -89,7 +169,22 @@ func (s *OrusAPI) IndexHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	indexView.SetModels(models).
-	RenderIndex(w)
+		RenderIndex(w)
+}
+
+func FileServerWithFallback(dirs ...string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, dir := range dirs {
+			filePath := filepath.Join(dir, strings.TrimPrefix(r.URL.Path, "/"))
+
+			if _, err := os.Stat(filePath); err == nil {
+				fs := http.FileServer(http.Dir(dir))
+				fs.ServeHTTP(w, r)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	})
 }
 
 // PromptLLMStream is a handler for the prompt/llm-stream endpoint
@@ -123,7 +218,7 @@ func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
 			}
 			signals.Result = fmt.Sprintf("BGE-M3 Embedding (1024 dimensions): %v", embedding)
 		}
-		
+
 		if err := sse.MarshalAndPatchSignals(signals); err != nil {
 			_ = sse.ConsoleError(fmt.Errorf("failed to patch signals: %w", err))
 		}
@@ -133,16 +228,16 @@ func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
 	if signals.Model == "" {
 		signals.Model = "llama3.1:8b"
 	}
-	
+
 	signals.ResponseMode = "stream"
-	
+
 	signals.Result = ""
 	if err := sse.MarshalAndPatchSignals(signals); err != nil {
 		_ = sse.ConsoleError(fmt.Errorf("failed to clear result: %w", err))
 		return
 	}
 
-	messages := []Message{
+	messages := []model.Message{
 		{
 			Role:    "user",
 			Content: signals.Prompt,
@@ -150,7 +245,7 @@ func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if signals.ResponseMode == "single" {
-		resp, err := s.OllamaClient.Chat(ChatRequest{
+		resp, err := s.OllamaClient.Chat(model.ChatRequest{
 			Model:    signals.Model,
 			Messages: messages,
 			Stream:   false,
@@ -167,11 +262,11 @@ func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.OllamaClient.ChatStream(ChatRequest{
+	err := s.OllamaClient.ChatStream(model.ChatRequest{
 		Model:    signals.Model,
 		Messages: messages,
 		Stream:   true,
-	}, func(chunk ChatStreamResponse) {
+	}, func(chunk model.ChatStreamResponse) {
 		if sse.IsClosed() {
 			return
 		}
@@ -194,12 +289,12 @@ func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
 // It sets up the routes and starts the server
 func (s *OrusAPI) Start() {
 	s.setupRoutes()
-	log.Println("Orus API ORUS_API_PORT", LoadEnv("ORUS_API_PORT"))
-	log.Println("Orus API ORUS_API_AGENT_MEMORY_PATH", LoadEnv("ORUS_API_AGENT_MEMORY_PATH"))
-	log.Println("Orus API ORUS_API_TOK_PATH", LoadEnv("ORUS_API_TOK_PATH"))
-	log.Println("Orus API ORUS_API_ONNX_PATH", LoadEnv("ORUS_API_ONNX_PATH"))
-	log.Println("Orus API ORUS_API_ONNX_RUNTIME_PATH", LoadEnv("ORUS_API_ONNX_RUNTIME_PATH"))
-	log.Println("Orus API ORUS_API_OLLAMA_BASE_URL", LoadEnv("ORUS_API_OLLAMA_BASE_URL"))
+	log.Println("Orus API ORUS_API_PORT", s.params.OrusAPIPort)
+	log.Println("Orus API ORUS_API_AGENT_MEMORY_PATH", s.params.AgentMemoryPath)
+	log.Println("Orus API ORUS_API_TOK_PATH", s.params.TokPath)
+	log.Println("Orus API ORUS_API_ONNX_PATH", s.params.OnnxPath)
+	log.Println("Orus API ORUS_API_ONNX_RUNTIME_PATH", s.params.OnnxRuntimePath)
+	log.Println("Orus API ORUS_API_OLLAMA_BASE_URL", s.params.OllamaBaseURL)
 	log.Println("Orus API server started on port", s.server.Addr)
 
 	if err := s.server.ListenAndServe(); err != nil {
@@ -225,21 +320,15 @@ func (s *OrusAPI) SetVerbose(verbose bool) *OrusAPI {
 // @Router       /orus-api/v1/system-info [get]
 func (s *OrusAPI) GetSystemInfo(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
-	response := OrusResponse{
+	response := model.OrusResponse{
 		Success:   true,
 		Serial:    uuid.New().String(),
 		Message:   "System info retrieved successfully",
 		Error:     "",
 		TimeTaken: time.Since(startTime),
-		Data: map[string]interface{}{
-			"version":     "1.0.0",
-			"name":        "Orus",
-			"description": "Orus is a server for the Orus library",
-			"author":      "Dsouza10082",
-			"author_url":  "https://github.com/Dsouza10082",
-		},
+		Data:      map[string]interface{}{},
 	}
-	respondJSON(w, http.StatusOK, response)
+	model.RespondJSON(w, http.StatusOK, response)
 }
 
 // decodeJSONBody is a function that decodes the JSON body of the request
@@ -252,12 +341,11 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes in
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body: "+err.Error())
+		model.RespondError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body: "+err.Error())
 		return false
 	}
 	return true
 }
-
 
 // EmbedText godoc
 // @Summary      Embeds text using the BGE-M3 or Ollama embedding model
@@ -271,40 +359,40 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes in
 func (s *OrusAPI) EmbedText(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
-	request := new(OrusRequest)
+	request := new(model.OrusRequest)
 	if !decodeJSONBody(w, r, request, 1<<20) {
 		return
 	}
 
 	modelVal, ok := request.Body["model"]
 	if !ok {
-		respondError(w, http.StatusBadRequest, "missing_model", "Field 'model' is required")
+		model.RespondError(w, http.StatusBadRequest, "missing_model", "Field 'model' is required")
 		return
 	}
-	model, ok := modelVal.(string)
+	llmModel, ok := modelVal.(string)
 	if !ok {
-		respondError(w, http.StatusBadRequest, "invalid_model", "Field 'model' must be a string")
+		model.RespondError(w, http.StatusBadRequest, "invalid_model", "Field 'model' must be a string")
 		return
 	}
 
 	textVal, ok := request.Body["text"]
 	if !ok {
-		respondError(w, http.StatusBadRequest, "missing_text", "Field 'text' is required")
+		model.RespondError(w, http.StatusBadRequest, "missing_text", "Field 'text' is required")
 		return
 	}
 	text, ok := textVal.(string)
 	if !ok {
-		respondError(w, http.StatusBadRequest, "invalid_text", "Field 'text' must be a string")
+		model.RespondError(w, http.StatusBadRequest, "invalid_text", "Field 'text' must be a string")
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	respChan := make(chan *OrusResponse, 1)
+	respChan := make(chan *model.OrusResponse, 1)
 
 	go func() {
-		resp := s.embedText(model, text, startTime)
+		resp := s.embedText(llmModel, text, startTime)
 		select {
 		case respChan <- resp:
 		case <-ctx.Done():
@@ -313,17 +401,16 @@ func (s *OrusAPI) EmbedText(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case resp := <-respChan:
-		respondJSON(w, http.StatusOK, resp)
+		model.RespondJSON(w, http.StatusOK, resp)
 	case <-ctx.Done():
-		timeoutResp := NewOrusResponse()
+		timeoutResp := model.NewOrusResponse()
 		timeoutResp.Error = "Error Timeout"
 		timeoutResp.Success = false
 		timeoutResp.TimeTaken = time.Since(startTime)
 		timeoutResp.Message = "Error Timeout"
-		respondJSON(w, http.StatusGatewayTimeout, timeoutResp)
+		model.RespondJSON(w, http.StatusGatewayTimeout, timeoutResp)
 	}
 }
-
 
 // OllamaModelList godoc
 // @Summary      Returns the list of models available in the Ollama server
@@ -341,14 +428,14 @@ func (s *OrusAPI) OllamaModelList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	response := NewOrusResponse()
+	response := model.NewOrusResponse()
 	response.Data = map[string]interface{}{
 		"models": models,
 	}
 	response.Success = true
 	response.TimeTaken = time.Since(startTime)
 	response.Message = "Ollama model list retrieved successfully"
-	respondJSON(w, http.StatusOK, response)
+	model.RespondJSON(w, http.StatusOK, response)
 }
 
 // OllamaPullModel godoc
@@ -370,7 +457,7 @@ func (s *OrusAPI) OllamaPullModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Name == "" {
-		respondError(w, http.StatusBadRequest, "missing_name", "Field 'name' is required")
+		model.RespondError(w, http.StatusBadRequest, "missing_name", "Field 'name' is required")
 		return
 	}
 
@@ -380,13 +467,13 @@ func (s *OrusAPI) OllamaPullModel(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		respondError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
+		model.RespondError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
 		return
 	}
 
 	ctx := r.Context()
 
-	progressCallback := func(progress PullModelProgress) {
+	progressCallback := func(progress model.PullModelProgress) {
 		select {
 		case <-ctx.Done():
 			return
@@ -417,8 +504,8 @@ func (s *OrusAPI) OllamaPullModel(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
-func (s *OrusAPI) embedText(model string, text string, startTime time.Time) *OrusResponse {
-	resp := NewOrusResponse()
+func (s *OrusAPI) embedText(llmModel string, text string, startTime time.Time) *model.OrusResponse {
+	resp := model.NewOrusResponse()
 
 	var (
 		serial       string
@@ -427,14 +514,14 @@ func (s *OrusAPI) embedText(model string, text string, startTime time.Time) *Oru
 		quantization string
 	)
 	serial = uuid.New().String()
-	switch model {
+	switch llmModel {
 	case "bge-m3":
 		vector32, err := s.Orus.BGEM3Embedder.Embed(text)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Success = false
 			resp.TimeTaken = time.Since(startTime)
-			resp.Message = fmt.Sprintf("Error embedding text with model %s", model)
+			resp.Message = fmt.Sprintf("Error embedding text with model %s", llmModel)
 			return resp
 		}
 		vector = make([]any, len(vector32))
@@ -444,12 +531,12 @@ func (s *OrusAPI) embedText(model string, text string, startTime time.Time) *Oru
 		dimensions = len(vector32)
 		quantization = "float32"
 	case "nomic-embed-text":
-		vector64, err := s.Orus.OllamaClient.GetEmbedding(model, text)
+		vector64, err := s.Orus.OllamaClient.GetEmbedding(llmModel, text)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Success = false
 			resp.TimeTaken = time.Since(startTime)
-			resp.Message = fmt.Sprintf("Error embedding text with model %s", model)
+			resp.Message = fmt.Sprintf("Error embedding text with model %s", llmModel)
 			return resp
 		}
 		vector = make([]any, len(vector64))
@@ -469,7 +556,7 @@ func (s *OrusAPI) embedText(model string, text string, startTime time.Time) *Oru
 		"serial":       serial,
 		"vector":       vector,
 		"text":         text,
-		"model":        model,
+		"model":        llmModel,
 		"dimensions":   dimensions,
 		"quantization": quantization,
 	}
@@ -492,8 +579,8 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now()
 
-	response := NewOrusResponse()
-	request := new(OrusRequest)
+	response := model.NewOrusResponse()
+	request := new(model.OrusRequest)
 
 	if !decodeJSONBody(w, r, request, 2<<20) {
 		return
@@ -501,30 +588,30 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 
 	modelVal, ok := request.Body["model"]
 	if !ok {
-		respondError(w, http.StatusBadRequest, "missing_model", "Field 'model' is required")
+		model.RespondError(w, http.StatusBadRequest, "missing_model", "Field 'model' is required")
 		return
 	}
-	model, ok := modelVal.(string)
+	llmModel, ok := modelVal.(string)
 	if !ok {
-		respondError(w, http.StatusBadRequest, "invalid_model", "Field 'model' must be a string")
+		model.RespondError(w, http.StatusBadRequest, "invalid_model", "Field 'model' must be a string")
 		return
 	}
 
 	messagesRaw, ok := request.Body["messages"]
 	if !ok {
-		respondError(w, http.StatusBadRequest, "missing_messages", "Field 'messages' is required")
+		model.RespondError(w, http.StatusBadRequest, "missing_messages", "Field 'messages' is required")
 		return
 	}
 
 	messagesJSON, err := json.Marshal(messagesRaw)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_messages", "Error marshalling messages")
+		model.RespondError(w, http.StatusBadRequest, "invalid_messages", "Error marshalling messages")
 		return
 	}
 
-	var messages []Message
+	var messages []model.Message
 	if err := json.Unmarshal(messagesJSON, &messages); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_messages", "Error unmarshalling messages: "+err.Error())
+		model.RespondError(w, http.StatusBadRequest, "invalid_messages", "Error unmarshalling messages: "+err.Error())
 		return
 	}
 
@@ -544,18 +631,18 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 		content := make([]string, 0)
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			respondError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
+			model.RespondError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
 			return
 		}
 		flusher.Flush()
-		chatStreamProgressCallback := func(chatResp ChatStreamResponse) {
+		chatStreamProgressCallback := func(chatResp model.ChatStreamResponse) {
 			data, _ := json.Marshal(chatResp)
 			fmt.Fprintf(w, "data: %s\n\n", string(data))
 			flusher.Flush()
 			content = append(content, chatResp.Message.Content)
 		}
-		err := s.OllamaClient.ChatStream(ChatRequest{
-			Model:    model,
+		err := s.OllamaClient.ChatStream(model.ChatRequest{
+			Model:    llmModel,
 			Messages: messages,
 			Stream:   stream,
 		}, chatStreamProgressCallback)
@@ -574,15 +661,15 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 			"content":    strings.Join(content, ""),
 			"serial":     uuid.New().String(),
 			"time_taken": time.Since(startTime).String(),
-			"model":      model,
+			"model":      llmModel,
 			"stream":     true,
 		})
 		fmt.Fprintf(w, "data: %s\n\n", string(successData))
 		flusher.Flush()
 		return
 	} else {
-		responseLLM, err := s.OllamaClient.Chat(ChatRequest{
-			Model:    model,
+		responseLLM, err := s.OllamaClient.Chat(model.ChatRequest{
+			Model:    llmModel,
 			Messages: messages,
 			Stream:   stream,
 		})
@@ -591,7 +678,7 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 			response.Message = "Error calling LLM"
 			response.Success = false
 			response.TimeTaken = time.Since(startTime)
-			respondJSON(w, http.StatusInternalServerError, response)
+			model.RespondJSON(w, http.StatusInternalServerError, response)
 		} else {
 			successData := map[string]interface{}{
 				"success":    true,
@@ -599,10 +686,10 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 				"content":    responseLLM.Message.Content,
 				"serial":     uuid.New().String(),
 				"time_taken": time.Since(startTime).String(),
-				"model":      model,
+				"model":      llmModel,
 				"stream":     stream,
 			}
-			respondJSON(w, http.StatusOK, successData)
+			model.RespondJSON(w, http.StatusOK, successData)
 		}
 	}
 }

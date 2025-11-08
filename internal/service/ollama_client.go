@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/Dsouza10082/orus/internal/model"
 )
 
 type OllamaClient struct {
@@ -14,22 +16,10 @@ type OllamaClient struct {
 	httpClient *http.Client
 }
 
-type PullModelProgress struct {
-	Status    string `json:"status"`
-	Digest    string `json:"digest,omitempty"`
-	Total     int64  `json:"total,omitempty"`
-	Completed int64  `json:"completed,omitempty"`
+type EmbeddingResponse struct {
+	Embedding []float64 `json:"embedding" swaggertype:"array" example:"[0.1, 0.2, 0.3]"`
 }
 
-type ChatStreamResponse struct {
-	Model     string    `json:"model"`
-	Message   Message   `json:"message"`
-	CreatedAt time.Time `json:"created_at"`
-	Done      bool      `json:"done"`
-	Progress  int       `json:"progress"`
-	Total     int64     `json:"total,omitempty"`
-	Completed int64     `json:"completed,omitempty"`
-}
 
 func NewOllamaClient(baseURL string) *OllamaClient {
 	return &OllamaClient{
@@ -40,7 +30,7 @@ func NewOllamaClient(baseURL string) *OllamaClient {
 	}
 }
 
-func (c *OllamaClient) Generate(req GenerateRequest) (*GenerateResponse, error) {
+func (c *OllamaClient) Generate(req model.GenerateRequest) (*model.GenerateResponse, error) {
 	url := fmt.Sprintf("%s/api/generate", c.baseURL)
 
 	jsonData, err := json.Marshal(req)
@@ -66,10 +56,10 @@ func (c *OllamaClient) Generate(req GenerateRequest) (*GenerateResponse, error) 
 	}
 
 	decoder := json.NewDecoder(resp.Body)
-	var finalResponse GenerateResponse
+	var finalResponse model.GenerateResponse
 
 	for decoder.More() {
-		var genResp GenerateResponse
+		var genResp model.GenerateResponse
 		if err := decoder.Decode(&genResp); err != nil {
 			return nil, fmt.Errorf("error decoding response: %w", err)
 		}
@@ -86,7 +76,7 @@ func (c *OllamaClient) Generate(req GenerateRequest) (*GenerateResponse, error) 
 	return &finalResponse, nil
 }
 
-func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
+func (c *OllamaClient) Chat(req model.ChatRequest) (*model.ChatResponse, error) {
 	url := fmt.Sprintf("%s/api/chat", c.baseURL)
 	jsonData, err := json.Marshal(req)
 	if err != nil {
@@ -109,10 +99,10 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 		return nil, fmt.Errorf("error from Ollama (status %d): %s", resp.StatusCode, string(body))
 	}
 	decoder := json.NewDecoder(resp.Body)
-	var finalResponse ChatResponse
+	var finalResponse model.ChatResponse
 	var fullContent string
 	for decoder.More() {
-		var chatResp ChatResponse
+		var chatResp model.ChatResponse
 		if err := decoder.Decode(&chatResp); err != nil {
 			return nil, fmt.Errorf("error decoding response: %w", err)
 		}
@@ -130,7 +120,7 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 	return &finalResponse, nil
 }
 
-func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse))  error {
+func (c *OllamaClient) ChatStream(req model.ChatRequest, chatStreamProgressCallback func(model.ChatStreamResponse))  error {
 	req.Stream = true
 	url := fmt.Sprintf("%s/api/chat", c.baseURL)
 	jsonData, err := json.Marshal(req)
@@ -154,7 +144,7 @@ func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback fu
 	}
 	decoder := json.NewDecoder(resp.Body)
 	for decoder.More() {
-		var chatResp ChatStreamResponse
+		var chatResp model.ChatStreamResponse
 		var fullContent string
 		if err := decoder.Decode(&chatResp); err != nil {
 			return fmt.Errorf("error decoding response: %w", err)
@@ -242,7 +232,7 @@ func (c *OllamaClient) ListModels() ([]string, error) {
 	return models, nil
 }
 
-func (c *OllamaClient) PullModel(modelName string, progressCallback func(PullModelProgress)) error {
+func (c *OllamaClient) PullModel(modelName string, progressCallback func(model.PullModelProgress)) error {
 	url := fmt.Sprintf("%s/api/pull", c.baseURL)
 
 	reqData := map[string]interface{}{
@@ -269,7 +259,7 @@ func (c *OllamaClient) PullModel(modelName string, progressCallback func(PullMod
 
 	decoder := json.NewDecoder(resp.Body)
 	for decoder.More() {
-		var progress PullModelProgress
+		var progress model.PullModelProgress
 		if err := decoder.Decode(&progress); err != nil {
 			return err
 		}

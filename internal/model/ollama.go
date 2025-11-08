@@ -1,6 +1,25 @@
-package main
+package model
 
-import "time"
+import (
+	"time"
+)
+
+type PullModelProgress struct {
+	Status    string `json:"status"`
+	Digest    string `json:"digest,omitempty"`
+	Total     int64  `json:"total,omitempty"`
+	Completed int64  `json:"completed,omitempty"`
+}
+
+type ChatStreamResponse struct {
+	Model     string    `json:"model"`
+	Message   Message   `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+	Done      bool      `json:"done"`
+	Progress  int       `json:"progress"`
+	Total     int64     `json:"total,omitempty"`
+	Completed int64     `json:"completed,omitempty"`
+}
 
 type ChatRequest struct {
 	Model    string    `json:"model" swaggertype:"string" example:"llama3.1:8b"`
@@ -23,10 +42,6 @@ type ChatResponse struct {
 type EmbeddingRequest struct {
 	Model  string `json:"model" swaggertype:"string" example:"llama3.1:8b"`
 	Prompt string `json:"prompt" swaggertype:"string" example:"Hello, how are you?"`
-}
-
-type EmbeddingResponse struct {
-	Embedding []float64 `json:"embedding" swaggertype:"array" example:"[0.1, 0.2, 0.3]"`
 }
 
 type Document struct {

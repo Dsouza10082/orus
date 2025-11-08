@@ -1,4 +1,4 @@
-package main
+package model
 
 import (
 	"encoding/json"
@@ -32,14 +32,14 @@ type OrusRequest struct {
 	Body    map[string]interface{} `json:"body" swaggertype:"interface{}" example:"{"text": "Hello, how are you?"}`
 }
 
-func respondJSON(w http.ResponseWriter, status int, data interface{}) {
+func RespondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
 }
 
-func respondError(w http.ResponseWriter, status int, errorType, message string) {
-	respondJSON(w, status, ErrorResponse{
+func RespondError(w http.ResponseWriter, status int, errorType, message string) {
+	RespondJSON(w, status, ErrorResponse{
 		Error:   errorType,
 		Message: message,
 	})
