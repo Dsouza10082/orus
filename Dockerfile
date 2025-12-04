@@ -16,10 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /go/src
 
 ARG TARGETOS=linux
-ARG TARGETARCH=arm64
+ARG TARGETARCH=amd64
 
-ENV GOOS=${TARGETOS}
-ENV GOARCH=${TARGETARCH}
+ENV GOOS=linux
+ENV GOARCH=amd64
 
 COPY go.mod go.sum ./
 RUN go mod download

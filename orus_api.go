@@ -14,7 +14,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/starfederation/datastar-go/datastar"
-	 httpSwagger "github.com/swaggo/http-swagger"
+	httpSwagger "github.com/swaggo/http-swagger"
 
 	_ "github.com/Dsouza10082/orus/docs"
 )
@@ -28,11 +28,11 @@ type OrusAPI struct {
 }
 
 type PromptSignals struct {
-    Prompt        string `json:"prompt"`
-    Model         string `json:"model"`
-    OperationType string `json:"operationType"`
-    ResponseMode  string `json:"responseMode"`
-    Result        string `json:"result"`
+	Prompt        string `json:"prompt"`
+	Model         string `json:"model"`
+	OperationType string `json:"operationType"`
+	ResponseMode  string `json:"responseMode"`
+	Result        string `json:"result"`
 }
 
 func NewOrusAPI() *OrusAPI {
@@ -69,9 +69,9 @@ func (s *OrusAPI) setupRoutes() {
 	s.router.Post("/prompt/llm-stream", s.PromptLLMStream)
 
 	s.router.Get("/swagger/*", httpSwagger.Handler(
-        httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
-    ))
-	
+		httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
+	))
+
 	s.router.Get("/swagger/doc.json", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "docs/swagger.json")
 	})
@@ -89,7 +89,7 @@ func (s *OrusAPI) IndexHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	indexView.SetModels(models).
-	RenderIndex(w)
+		RenderIndex(w)
 }
 
 // PromptLLMStream is a handler for the prompt/llm-stream endpoint
@@ -123,7 +123,7 @@ func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
 			}
 			signals.Result = fmt.Sprintf("BGE-M3 Embedding (1024 dimensions): %v", embedding)
 		}
-		
+
 		if err := sse.MarshalAndPatchSignals(signals); err != nil {
 			_ = sse.ConsoleError(fmt.Errorf("failed to patch signals: %w", err))
 		}
@@ -133,9 +133,9 @@ func (s *OrusAPI) PromptLLMStream(w http.ResponseWriter, r *http.Request) {
 	if signals.Model == "" {
 		signals.Model = "llama3.1:8b"
 	}
-	
+
 	signals.ResponseMode = "stream"
-	
+
 	signals.Result = ""
 	if err := sse.MarshalAndPatchSignals(signals); err != nil {
 		_ = sse.ConsoleError(fmt.Errorf("failed to clear result: %w", err))
@@ -258,7 +258,6 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes in
 	return true
 }
 
-
 // EmbedText godoc
 // @Summary      Embeds text using the BGE-M3 or Ollama embedding model
 // @Description  Embeds text using the BGE-M3 or Ollama embedding model
@@ -323,7 +322,6 @@ func (s *OrusAPI) EmbedText(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusGatewayTimeout, timeoutResp)
 	}
 }
-
 
 // OllamaModelList godoc
 // @Summary      Returns the list of models available in the Ollama server
@@ -443,8 +441,23 @@ func (s *OrusAPI) embedText(model string, text string, startTime time.Time) *Oru
 		}
 		dimensions = len(vector32)
 		quantization = "float32"
-	case "nomic-embed-text":
+	case "nomic-embed-text:latest":
 		vector64, err := s.Orus.OllamaClient.GetEmbedding(model, text)
+		if err != nil {
+			resp.Error = err.Error()
+			resp.Success = false
+			resp.TimeTaken = time.Since(startTime)
+			resp.Message = fmt.Sprintf("Error embedding text with model %s", model)
+			return resp
+		}
+		vector = make([]any, len(vector64))
+		for i, v := range vector64 {
+			vector[i] = v
+		}
+		dimensions = len(vector64)
+		quantization = "float64"
+	case "ollama-bge-m3":
+		vector64, err := s.Orus.OllamaClient.GetEmbedding("bge-m3:latest", text)
 		if err != nil {
 			resp.Error = err.Error()
 			resp.Success = false
