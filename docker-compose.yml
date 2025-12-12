@@ -47,6 +47,7 @@ services:
       - OLLAMA_KEEP_ALIVE=30m
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_DEBUG=1
+      - OLLAMA_API_KEY=52b8c58f60084191be50f9a6b609c60f.A-gkOw1rLduYusbeg2o8hOrL
     ports:
       - "8081:8081"
     volumes:

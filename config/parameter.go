@@ -31,6 +31,10 @@ type Parameters struct {
 	PostgresMaxConnections     int    `json:"postgres_max_connections"`
 	PostgresMinConnections     int    `json:"postgres_min_connections"`
 	PostgresConnectionLifeTime int    `json:"postgres_connection_life_time"`
+	NatsURL                    string `json:"nats_url"`
+	NatsModelsDir              string `json:"nats_models_dir"`
+	LMStudioBaseURL            string `json:"lmstudio_base_url"`
+	OllamaAPiKey               string `json:"ollama_api_key"`
 }
 
 func GetParameters() *Parameters {
@@ -40,7 +44,7 @@ func GetParameters() *Parameters {
 	milvusMaxConnectionsAux := LoadEnv("MILVUS_MAX_CONNECTIONS")
 	milvusMinConnectionsAux := LoadEnv("MILVUS_MIN_CONNECTIONS")
 	milvusConnectionLifeTimeAux := LoadEnv("MILVUS_CONNECTION_LIFE_TIME")
-	
+
 	pgMaxConnections, err := strconv.Atoi(pgMaxConnectionsAux)
 	if err != nil {
 		panic(err)
@@ -86,6 +90,10 @@ func GetParameters() *Parameters {
 		PostgresMaxConnections:     pgMaxConnections,
 		PostgresMinConnections:     pgMinConnections,
 		PostgresConnectionLifeTime: pgConnectionLifeTime,
+		NatsURL:                    LoadEnv("NATS_URL"),
+		NatsModelsDir:              LoadEnv("NATS_MODELS_DIR"),
+		LMStudioBaseURL:            LoadEnv("LMSTUDIO_BASE_URL"),
+		OllamaAPiKey:               LoadEnv("OLLAMA_API_KEY"),
 	}
 }
 

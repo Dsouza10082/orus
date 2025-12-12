@@ -21,8 +21,10 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 
 	bge_m3 "github.com/Dsouza10082/go-bge-m3-embed"
+	"github.com/Dsouza10082/nats-llm-studio"
 	_ "github.com/Dsouza10082/orus/docs"
 	"github.com/Dsouza10082/orus/internal/model"
+	service_llm_studio "github.com/Dsouza10082/orus/internal/service"
 )
 
 type Orus struct {
@@ -97,11 +99,12 @@ func (s *Orus) PullLLMModel(llmModel string) (string, error) {
 
 type OrusAPI struct {
 	*Orus
-	Port    string
-	router  *chi.Mux
-	Verbose bool
-	server  *http.Server
-	params  *config.Parameters
+	Port      string
+	router    *chi.Mux
+	Verbose   bool
+	server    *http.Server
+	params    *config.Parameters
+	LmsServer *nats_llm_studio.Server
 }
 
 type PromptSignals struct {
@@ -129,13 +132,15 @@ func NewOrusAPI() *OrusAPI {
 		ReadHeaderTimeout: 10 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+	lmStudioServer := service_llm_studio.NewNATSClient()
 	return &OrusAPI{
-		Orus:    NewOrus(),
-		Port:    params.OrusAPIPort,
-		router:  router,
-		Verbose: false,
-		server:  server,
-		params:  params,
+		Orus:      NewOrus(),
+		Port:      params.OrusAPIPort,
+		router:    router,
+		Verbose:   false,
+		server:    server,
+		params:    params,
+		LmsServer: lmStudioServer,
 	}
 }
 
@@ -155,6 +160,9 @@ func (s *OrusAPI) setupRoutes() {
 	s.router.Get("/swagger/doc.json", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "docs/swagger.json")
 	})
+
+	// Nats LLM Studio routes
+	//s.router.Post("/orus-api/v1/llm-studio/list-models", s.ListModelsLLMStudio)
 }
 
 // IndexHandler is a handler for the prompt endpoint
@@ -545,6 +553,21 @@ func (s *OrusAPI) embedText(llmModel string, text string, startTime time.Time) *
 		}
 		dimensions = len(vector64)
 		quantization = "float64"
+	case "ollama-bge-m3":
+		vector64, err := s.Orus.OllamaClient.GetEmbedding("bge-m3", text)
+		if err != nil {
+			resp.Error = err.Error()
+			resp.Success = false
+			resp.TimeTaken = time.Since(startTime)
+			resp.Message = fmt.Sprintf("Error embedding text with model %s", llmModel)
+			return resp
+		}
+		vector = make([]any, len(vector64))
+		for i, v := range vector64 {
+			vector[i] = v
+		}
+		dimensions = len(vector64)
+		quantization = "float64"	
 	default:
 		resp.Error = "Invalid model"
 		resp.Success = false
@@ -692,6 +715,19 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 			model.RespondJSON(w, http.StatusOK, successData)
 		}
 	}
+}
+
+// ListModels godoc
+// @Summary      Lists the models available in the LM Studio server
+// @Description  Lists the models available in the LM Studio server
+// @Tags         llm
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  OrusResponse
+// @Failure      500  {object}  OrusResponse
+// @Router       /orus-api/v1/llm-studio/list-models [post]
+func (s *OrusAPI) ListModelsLLMStudio(w http.ResponseWriter, r *http.Request) {
+	
 }
 
 // ---------------------------MAIN FUNCTION------------------------------

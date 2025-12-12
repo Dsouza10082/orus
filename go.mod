@@ -1,6 +1,6 @@
 module github.com/Dsouza10082/orus
 
-go 1.25.2
+go 1.25.4
 
 require (
 	github.com/Dsouza10082/ConcurrentOrderedMap v1.1.0
@@ -17,6 +17,7 @@ require (
 
 require (
 	github.com/CAFxX/httpcompression v0.0.9 // indirect
+	github.com/Dsouza10082/nats-llm-studio v0.0.1 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/cockroachdb/errors v1.9.1 // indirect
@@ -47,6 +48,9 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.4.10-0.20240819025435-512e3b98866a // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
+	github.com/nats-io/nats.go v1.47.0 // indirect
+	github.com/nats-io/nkeys v0.4.11 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
