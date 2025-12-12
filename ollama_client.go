@@ -132,16 +132,16 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 
 func (c *OllamaClient) ChatCloud(req ChatRequest) (*ChatResponse, error) {
 	url := "https://ollama.com/api/chat"
+	ollamaAPIKey := LoadEnv("OLLAMA_API_KEY")
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("error serializing request: %w", err)
 	}
-
 	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer 52b8c58f60084191be50f9a6b609c60f.A-gkOw1rLduYusbeg2o8hOrL")
+	httpReq.Header.Set("Authorization", "Bearer "+ollamaAPIKey)
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %w", err)
@@ -173,7 +173,7 @@ func (c *OllamaClient) ChatCloud(req ChatRequest) (*ChatResponse, error) {
 	return &finalResponse, nil
 }
 
-func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse))  error {
+func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse)) error {
 	req.Stream = true
 	url := fmt.Sprintf("%s/api/chat", c.baseURL)
 	jsonData, err := json.Marshal(req)
@@ -211,10 +211,10 @@ func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback fu
 			break
 		}
 	}
-	return  nil
+	return nil
 }
 
-func (c *OllamaClient) ChatStreamCloud(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse))  error {
+func (c *OllamaClient) ChatStreamCloud(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse)) error {
 	req.Stream = true
 	url := "https://ollama.com/api/chat"
 	jsonData, err := json.Marshal(req)
@@ -251,7 +251,7 @@ func (c *OllamaClient) ChatStreamCloud(req ChatRequest, chatStreamProgressCallba
 			break
 		}
 	}
-	return  nil
+	return nil
 }
 
 // GetEmbedding obtém embeddings de um texto

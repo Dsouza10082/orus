@@ -535,17 +535,6 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	formatValVal, ok := request.Body["format"]
-	if !ok {
-		respondError(w, http.StatusBadRequest, "missing_format", "Field 'format' is required")
-		return
-	}
-	format, ok := formatValVal.(string)
-	if !ok {
-		respondError(w, http.StatusBadRequest, "invalid_format", "Field 'format' must be a string")
-		return
-	}
-
 	messagesRaw, ok := request.Body["messages"]
 	if !ok {
 		respondError(w, http.StatusBadRequest, "missing_messages", "Field 'messages' is required")
@@ -571,6 +560,19 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	chatRequest := ChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   stream,
+		Think:    think,
+	}
+
+	formatValVal, ok := request.Body["format"]
+	if ok {
+		format, _ := formatValVal.(string)
+		chatRequest.Format = format
+	}
+
 	if stream {
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -590,13 +592,7 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 			content = append(content, chatResp.Message.Content)
 		}
-		err := s.OllamaClient.ChatStream(ChatRequest{
-			Model:    model,
-			Messages: messages,
-			Stream:   stream,
-			Think:    think,
-			Format:   format,
-		}, chatStreamProgressCallback)
+		err := s.OllamaClient.ChatStream(chatRequest, chatStreamProgressCallback)
 		if err != nil {
 			errorData, _ := json.Marshal(map[string]string{
 				"status": "error",
@@ -619,13 +615,7 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return
 	} else {
-		responseLLM, err := s.OllamaClient.Chat(ChatRequest{
-			Model:    model,
-			Messages: messages,
-			Stream:   stream,
-			Think:    think,
-			Format:   format,
-		})
+		responseLLM, err := s.OllamaClient.Chat(chatRequest)
 		if err != nil {
 			response.Error = err.Error()
 			response.Message = "Error calling LLM"
@@ -642,7 +632,6 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 				"model":      model,
 				"stream":     stream,
 				"think":      think,
-				"format":     format,
 			}
 			respondJSON(w, http.StatusOK, successData)
 		}
@@ -691,17 +680,6 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	formatValVal, ok := request.Body["format"]
-	if !ok {
-		respondError(w, http.StatusBadRequest, "missing_format", "Field 'format' is required")
-		return
-	}
-	format, ok := formatValVal.(string)
-	if !ok {
-		respondError(w, http.StatusBadRequest, "invalid_format", "Field 'format' must be a string")
-		return
-	}
-
 	messagesRaw, ok := request.Body["messages"]
 	if !ok {
 		respondError(w, http.StatusBadRequest, "missing_messages", "Field 'messages' is required")
@@ -727,6 +705,19 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	chatRequest := ChatRequest{
+		Model:    model,
+		Messages: messages,
+		Stream:   stream,
+		Think:    think,
+	}
+
+	formatValVal, ok := request.Body["format"]
+	if ok {
+		format, _ := formatValVal.(string)
+		chatRequest.Format = format
+	}
+	
 	if stream {
 
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -746,13 +737,7 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 			content = append(content, chatResp.Message.Content)
 		}
-		err := s.OllamaClient.ChatStreamCloud(ChatRequest{
-			Model:    model,
-			Messages: messages,
-			Stream:   stream,
-			Think:    think,
-			Format:   format,
-		}, chatStreamProgressCallback)
+		err := s.OllamaClient.ChatStreamCloud(chatRequest, chatStreamProgressCallback)
 		if err != nil {
 			errorData, _ := json.Marshal(map[string]string{
 				"status": "error",
@@ -771,19 +756,12 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 			"model":      model,
 			"stream":     true,
 			"think":      think,
-			"format":     format,
 		})
 		fmt.Fprintf(w, "data: %s\n\n", string(successData))
 		flusher.Flush()
 		return
 	} else {
-		responseLLM, err := s.OllamaClient.ChatCloud(ChatRequest{
-			Model:    model,
-			Messages: messages,
-			Stream:   stream,
-			Think:    think,
-			Format:   format,
-		})
+		responseLLM, err := s.OllamaClient.ChatCloud(chatRequest)
 		if err != nil {
 			response.Error = err.Error()
 			response.Message = "Error calling LLM"
@@ -800,7 +778,6 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 				"model":      model,
 				"stream":     stream,
 				"think":      think,
-				"format":     format,
 			}
 			respondJSON(w, http.StatusOK, successData)
 		}
