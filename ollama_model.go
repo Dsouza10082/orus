@@ -6,6 +6,8 @@ type ChatRequest struct {
 	Model    string    `json:"model" swaggertype:"string" example:"llama3.1:8b"`
 	Messages []Message `json:"messages" swaggertype:"array" example:"[{role: 'user', content: 'Hello, how are you?'}]"`
 	Stream   bool      `json:"stream" swaggertype:"boolean" example:"true"`
+	Format   string    `json:"format" swaggertype:"string" example:"json"`
+	Think    bool      `json:"think" swaggertype:"boolean" example:"true"`
 }
 
 type Message struct {

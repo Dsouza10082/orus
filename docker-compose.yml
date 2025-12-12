@@ -35,7 +35,7 @@ services:
       - HSA_OVERRIDE_GFX_VERSION=10.3.0
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_NUM_PARALLEL=6
-      - OLLAMA_MAX_LOADED_MODELS=2
+      - OLLAMA_MAX_LOADED_MODELS=6
       - OLLAMA_KEEP_ALIVE=30m
       - OLLAMA_DEBUG=1
     restart: unless-stopped

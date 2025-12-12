@@ -130,6 +130,49 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 	return &finalResponse, nil
 }
 
+func (c *OllamaClient) ChatCloud(req ChatRequest) (*ChatResponse, error) {
+	url := "https://ollama.com/api/chat"
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("error serializing request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer 52b8c58f60084191be50f9a6b609c60f.A-gkOw1rLduYusbeg2o8hOrL")
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("error making request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("error from Ollama (status %d): %s", resp.StatusCode, string(body))
+	}
+	decoder := json.NewDecoder(resp.Body)
+	var finalResponse ChatResponse
+	var fullContent string
+	for decoder.More() {
+		var chatResp ChatResponse
+		if err := decoder.Decode(&chatResp); err != nil {
+			return nil, fmt.Errorf("error decoding response: %w", err)
+		}
+		fullContent += chatResp.Message.Content
+		finalResponse.Model = chatResp.Model
+		finalResponse.CreatedAt = chatResp.CreatedAt
+		finalResponse.Done = chatResp.Done
+		finalResponse.Message.Role = chatResp.Message.Role
+
+		if chatResp.Done {
+			break
+		}
+	}
+	finalResponse.Message.Content = fullContent
+	return &finalResponse, nil
+}
+
 func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse))  error {
 	req.Stream = true
 	url := fmt.Sprintf("%s/api/chat", c.baseURL)
@@ -143,6 +186,46 @@ func (c *OllamaClient) ChatStream(req ChatRequest, chatStreamProgressCallback fu
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("error making request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("error from Ollama (status %d): %s", resp.StatusCode, string(body))
+	}
+	decoder := json.NewDecoder(resp.Body)
+	for decoder.More() {
+		var chatResp ChatStreamResponse
+		var fullContent string
+		if err := decoder.Decode(&chatResp); err != nil {
+			return fmt.Errorf("error decoding response: %w", err)
+		}
+		fullContent += chatResp.Message.Content
+		chatResp.Message.Content = fullContent
+		chatResp.Model = req.Model
+		chatResp.CreatedAt = time.Now()
+		chatStreamProgressCallback(chatResp)
+		if chatResp.Done {
+			break
+		}
+	}
+	return  nil
+}
+
+func (c *OllamaClient) ChatStreamCloud(req ChatRequest, chatStreamProgressCallback func(ChatStreamResponse))  error {
+	req.Stream = true
+	url := "https://ollama.com/api/chat"
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("error serializing request: %w", err)
+	}
+	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer 52b8c58f60084191be50f9a6b609c60f.A-gkOw1rLduYusbeg2o8hOrL")
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("error making request: %w", err)
