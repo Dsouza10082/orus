@@ -50,7 +50,7 @@ func NewOrusAPI() *OrusAPI {
 			next.ServeHTTP(w, r)
 		})
 	})
-	
+
 	server := &http.Server{
 		Addr:              ":" + LoadEnv("ORUS_API_PORT"),
 		Handler:           router,
@@ -253,22 +253,6 @@ func (s *OrusAPI) GetSystemInfo(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, response)
 }
 
-// decodeJSONBody is a function that decodes the JSON body of the request
-// It returns true if the body is decoded successfully, false otherwise
-func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) bool {
-	defer r.Body.Close()
-
-	if maxBytes > 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body: "+err.Error())
-		return false
-	}
-	return true
-}
-
 // EmbedText godoc
 // @Summary      Embeds text using the BGE-M3 or Ollama embedding model
 // @Description  Embeds text using the BGE-M3 or Ollama embedding model
@@ -282,9 +266,6 @@ func (s *OrusAPI) EmbedText(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
 	request := new(OrusRequest)
-	if !decodeJSONBody(w, r, request, 1<<20) {
-		return
-	}
 
 	modelVal, ok := request.Body["model"]
 	if !ok {
@@ -372,10 +353,6 @@ func (s *OrusAPI) OllamaModelList(w http.ResponseWriter, r *http.Request) {
 func (s *OrusAPI) OllamaPullModel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
-	}
-
-	if !decodeJSONBody(w, r, &req, 1<<20) {
-		return
 	}
 
 	if req.Name == "" {
@@ -518,10 +495,6 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 
 	response := NewOrusResponse()
 	request := new(OrusRequest)
-
-	if !decodeJSONBody(w, r, request, 2<<20) {
-		return
-	}
 
 	modelVal, ok := request.Body["model"]
 	if !ok {
@@ -671,10 +644,6 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 
 	response := NewOrusResponse()
 	request := new(OrusRequest)
-
-	if !decodeJSONBody(w, r, request, 2<<20) {
-		return
-	}
 
 	modelVal, ok := request.Body["model"]
 	if !ok {
