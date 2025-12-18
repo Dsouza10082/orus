@@ -2,11 +2,28 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+type LLMCloudRequestBody struct {
+	Model    string    `json:"model"`
+	Think    bool      `json:"think"`
+	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream"`
+	Format   string    `json:"format,omitempty"`
+	Images   []string  `json:"images,omitempty"`
+}
+
+type LLMCloudRequest struct {
+	Created string              `json:"created"`
+	Body    LLMCloudRequestBody `json:"body"`
+}
+
+
 
 type OrusResponse struct {
 	Success   bool                   `json:"success" swaggertype:"boolean" example:"true"`
@@ -32,15 +49,35 @@ type OrusRequest struct {
 	Body    map[string]interface{} `json:"body" swaggertype:"interface{}" example:"{"text": "Hello, how are you?"}`
 }
 
+func releaseChatRequest(chatRequest *ChatRequest) {
+	chatRequest.Messages = chatRequest.Messages[:0]
+	chatRequest.Images = chatRequest.Images[:0]
+	chatRequest.Format = ""
+	chatRequest.Model = ""
+	chatRequestPool.Put(chatRequest)
+}
+
+func logRequest(requestID string, chatRequest *ChatRequest) {
+	slog.Debug("LLM request",
+		"request_id", requestID,
+		"model", chatRequest.Model,
+		"think", chatRequest.Think,
+		"stream", chatRequest.Stream,
+		"messages_count", len(chatRequest.Messages),
+	)
+}
+
+
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
 }
 
-func respondError(w http.ResponseWriter, status int, errorType, message string) {
-	respondJSON(w, status, ErrorResponse{
-		Error:   errorType,
-		Message: message,
+func respondError(w http.ResponseWriter, status int, code, message string) {
+	respondJSON(w, status, map[string]interface{}{
+		"success": false,
+		"error":   code,
+		"message": message,
 	})
 }

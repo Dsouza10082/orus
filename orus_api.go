@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	view "github.com/Dsouza10082/orus/view"
@@ -35,7 +38,59 @@ type PromptSignals struct {
 	Result        string `json:"result"`
 }
 
-const MaxBodySize = 20 * 1024 * 1024
+
+var (
+	bufferPool = sync.Pool{
+		New: func() interface{} {
+			return bytes.NewBuffer(make([]byte, 0, 4096))
+		},
+	}
+
+	stringBuilderPool = sync.Pool{
+		New: func() interface{} {
+			return &strings.Builder{}
+		},
+	}
+
+	chatRequestPool = sync.Pool{
+		New: func() interface{} {
+			return &ChatRequest{
+				Messages: make([]Message, 0, 10),
+				Images:   make([]string, 0, 4),
+			}
+		},
+	}
+)
+
+// ==================== Configuration ====================
+
+const (
+	MaxBodySize      = 10 * 1024 * 1024 // 10MB
+	MaxConcurrent    = 100
+	RequestTimeout   = 5 * time.Minute
+	StreamBufferSize = 32 * 1024
+)
+
+// ==================== Validation ====================
+
+type ValidationError struct {
+	Code    string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return e.Message
+}
+
+func validateLLMRequest(body *LLMCloudRequestBody) *ValidationError {
+	if body.Model == "" {
+		return &ValidationError{"missing_model", "Field 'model' is required"}
+	}
+	if len(body.Messages) == 0 {
+		return &ValidationError{"missing_messages", "Field 'messages' is required"}
+	}
+	return nil
+}
 
 func NewOrusAPI() *OrusAPI {
 	router := chi.NewRouter()
@@ -43,6 +98,11 @@ func NewOrusAPI() *OrusAPI {
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.StripSlashes)
 	router.Use(middleware.URLFormat)
+
+	router.Use(middleware.RequestID)
+	router.Use(middleware.RealIP)
+	router.Use(RequestLogger)
+	router.Use(middleware.Timeout(RequestTimeout))
 
 	router.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +136,8 @@ func (s *OrusAPI) setupRoutes() {
 	s.router.Post("/orus-api/v1/ollama-pull-model", s.OllamaPullModel)
 	s.router.Post("/orus-api/v1/call-llm", s.CallLLM)
 	s.router.Post("/orus-api/v1/call-llm-cloud", s.CallLLMCloud)
+	s.router.Post("/orus-api/v2/call-llm", s.CallLLMOptimized)
+	s.router.Post("/orus-api/v2/health-check", s.HealthCheck)
 	s.router.Get("/prompt", s.IndexHandler)
 	s.router.Post("/prompt/llm-stream", s.PromptLLMStream)
 
@@ -800,6 +862,209 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+func (s *OrusAPI) handleStreamingResponseChi(ctx context.Context, w http.ResponseWriter, chatRequest *ChatRequest, startTime time.Time, requestID string) {
+	// Headers SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("X-Request-ID", requestID)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, "streaming_not_supported", "Streaming not supported")
+		return
+	}
+
+	// StringBuilder do pool
+	contentBuilder := stringBuilderPool.Get().(*strings.Builder)
+	contentBuilder.Reset()
+	defer stringBuilderPool.Put(contentBuilder)
+
+	// Buffer para JSON
+	jsonBuf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(jsonBuf)
+
+	encoder := json.NewEncoder(jsonBuf)
+	flusher.Flush()
+
+	// Canal para erros do streaming
+	errChan := make(chan error, 1)
+
+	// Callback do streaming
+	chatStreamProgressCallback := func(chatResp ChatStreamResponse) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			jsonBuf.Reset()
+			if err := encoder.Encode(chatResp); err != nil {
+				return
+			}
+			data := bytes.TrimSuffix(jsonBuf.Bytes(), []byte("\n"))
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+			contentBuilder.WriteString(chatResp.Message.Content)
+		}
+	}
+
+	// Executar streaming em goroutine para permitir cancelamento
+	go func() {
+		errChan <- s.OllamaClient.ChatStreamCloud(*chatRequest, chatStreamProgressCallback)
+	}()
+
+	// Aguardar resultado ou cancelamento
+	select {
+	case <-ctx.Done():
+		jsonBuf.Reset()
+		encoder.Encode(map[string]string{
+			"status": "cancelled",
+			"error":  "Request cancelled by client",
+		})
+		fmt.Fprintf(w, "data: %s\n\n", jsonBuf.String())
+		flusher.Flush()
+		return
+
+	case err := <-errChan:
+		if err != nil {
+			jsonBuf.Reset()
+			encoder.Encode(map[string]string{
+				"status": "error",
+				"error":  err.Error(),
+			})
+			fmt.Fprintf(w, "data: %s\n\n", jsonBuf.String())
+			flusher.Flush()
+			return
+		}
+	}
+
+	jsonBuf.Reset()
+	encoder.Encode(map[string]interface{}{
+		"status":     "success",
+		"message":    "LLM request completed successfully",
+		"content":    contentBuilder.String(),
+		"serial":     uuid.New().String(),
+		"request_id": requestID,
+		"time_taken": time.Since(startTime).String(),
+		"model":      chatRequest.Model,
+		"stream":     true,
+		"think":      chatRequest.Think,
+	})
+	fmt.Fprintf(w, "data: %s\n\n", jsonBuf.String())
+	flusher.Flush()
+}
+
+func (s *OrusAPI) CallLLMOptimized(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	ctx := r.Context()
+
+	requestID := middleware.GetReqID(ctx)
+
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufferPool.Put(buf)
+
+	if _, err := io.Copy(buf, r.Body); err != nil {
+		respondError(w, http.StatusBadRequest, "read_error", "Failed to read request body")
+		return
+	}
+
+	var request LLMCloudRequest
+	if err := json.Unmarshal(buf.Bytes(), &request); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body: "+err.Error())
+		return
+	}
+
+	if err := validateLLMRequest(&request.Body); err != nil {
+		respondError(w, http.StatusBadRequest, err.Code, err.Message)
+		return
+	}
+
+	chatRequest := acquireChatRequest(&request.Body)
+	defer releaseChatRequest(chatRequest)
+
+	go logRequest(requestID, chatRequest)
+
+	if chatRequest.Stream {
+		s.handleStreamingResponseChi(ctx, w, chatRequest, startTime, requestID)
+	} else {
+		s.handleSyncResponseChi(ctx, w, chatRequest, startTime, requestID)
+	}
+}
+
+func (s *OrusAPI) HealthCheck(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "healthy",
+		"time":   time.Now().UTC(),
+	})
+}
+
+func (s *OrusAPI) handleSyncResponseChi(ctx context.Context, w http.ResponseWriter, chatRequest *ChatRequest, startTime time.Time, requestID string) {
+
+	type result struct {
+		response *ChatResponse
+		err      error
+	}
+	resultChan := make(chan result, 1)
+
+	go func() {
+		resp, err := s.OllamaClient.ChatCloud(*chatRequest)
+		resultChan <- result{resp, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		respondError(w, http.StatusRequestTimeout, "timeout", "Request timed out or was cancelled")
+		return
+
+	case res := <-resultChan:
+		if res.err != nil {
+			response := OrusResponse{
+				Success:   false,
+				Serial:    requestID,
+				Error:     res.err.Error(),
+				Message:   "Error calling LLM",
+				TimeTaken: time.Since(startTime),
+			}
+			respondJSON(w, http.StatusInternalServerError, response)
+			return
+		}
+
+		successData := map[string]interface{}{
+			"success":    true,
+			"message":    "LLM request completed successfully",
+			"content":    res.response.Message.Content,
+			"serial":     uuid.New().String(),
+			"request_id": requestID,
+			"time_taken": time.Since(startTime).String(),
+			"model":      chatRequest.Model,
+			"stream":     false,
+			"think":      chatRequest.Think,
+		}
+		respondJSON(w, http.StatusOK, successData)
+	}
+}
+
+// ==================== Helper Functions ====================
+
+func acquireChatRequest(body *LLMCloudRequestBody) *ChatRequest {
+	chatRequest := chatRequestPool.Get().(*ChatRequest)
+	chatRequest.Model = body.Model
+	chatRequest.Messages = append(chatRequest.Messages[:0], body.Messages...)
+	chatRequest.Stream = body.Stream
+	chatRequest.Think = body.Think
+	chatRequest.Format = body.Format
+	if len(body.Images) > 0 {
+		chatRequest.Images = append(chatRequest.Images[:0], body.Images...)
+	}
+	return chatRequest
+}
+
+
+
+
+
 
 // ---------------------------MAIN FUNCTION------------------------------
 
