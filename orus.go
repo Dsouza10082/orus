@@ -24,7 +24,7 @@ func NewOrus() *Orus {
 		SetRuntimePath(LoadEnv("ORUS_API_ONNX_RUNTIME_PATH"))
 	bge_m3_embedder.EmbeddingModel.SetOnnxModelPath(LoadEnv("ORUS_API_ONNX_PATH"))
 	bge_m3_embedder.Verbose = true
-	ollamaClient := NewOllamaClient(LoadEnv("ORUS_API_OLLAMA_BASE_URL"))
+	ollamaClient := NewOllamaClient()
 	return &Orus{
 		BGEM3Embedder: bge_m3_embedder,
 		OllamaClient: ollamaClient,

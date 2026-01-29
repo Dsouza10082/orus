@@ -28,6 +28,8 @@ type OrusAPI struct {
 	router  *chi.Mux
 	Verbose bool
 	server  *http.Server
+	activeConns   map[string]context.CancelFunc
+	activeConnsMu sync.RWMutex
 }
 
 type PromptSignals struct {
@@ -129,6 +131,16 @@ func NewOrusAPI() *OrusAPI {
 	}
 }
 
+func DefaultOpenRouteConfig() *OpenRouteConfig {
+	return &OpenRouteConfig{
+		APIKey:          "",
+		OpenRouteAPIKey: "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",
+		MaxConnections:  1000,
+		RequestTimeout:  30 * time.Second,
+		EnableAuth:      false,
+	}
+}
+
 func (s *OrusAPI) setupRoutes() {
 	s.router.Get("/orus-api/v1/system-info", s.GetSystemInfo)
 	s.router.Post("/orus-api/v1/embed-text", s.EmbedText)
@@ -140,6 +152,10 @@ func (s *OrusAPI) setupRoutes() {
 	s.router.Post("/orus-api/v2/health-check", s.HealthCheck)
 	s.router.Get("/prompt", s.IndexHandler)
 	s.router.Post("/prompt/llm-stream", s.PromptLLMStream)
+	s.router.Post("/orus-api/v2/openroute", s.HandleOpenRouteChatStream)
+	s.router.Post("/orus-api/v2/openroute-credit", s.HandleOpenRouteChatCredit)
+	s.router.Post("/orus-api/v2/web-search", s.HandleWebSearch)
+
 
 	s.router.Get("/swagger/*", httpSwagger.Handler(
 		httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
@@ -1046,6 +1062,124 @@ func (s *OrusAPI) handleSyncResponseChi(ctx context.Context, w http.ResponseWrit
 	}
 }
 
+func (s *OrusAPI) HandleOpenRouteChatStream(w http.ResponseWriter, r *http.Request) {
+	requestID := r.Context().Value("requestID").(string)
+	
+	// Parse do request
+	var req OpenRouteChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if len(req.Messages) == 0 {
+		respondError(w, http.StatusBadRequest, "messages required", "Messages required")
+		return
+	}
+
+	// Converte para DTO do OpenRoute
+	openRouteReq := &OpenRoute{
+		Model:       req.Model,
+		Models:      req.Models,
+		Stream:      true,
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+		Messages:    make([]OpenRouteMessagesDTO, len(req.Messages)),
+	}
+
+	for i, msg := range req.Messages {
+		openRouteReq.Messages[i] = OpenRouteMessagesDTO{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	
+	// Registra conexão ativa
+	s.activeConnsMu.Lock()
+	s.activeConns[requestID] = cancel
+	s.activeConnsMu.Unlock()
+	
+	defer func() {
+		cancel()
+		s.activeConnsMu.Lock()
+		delete(s.activeConns, requestID)
+		s.activeConnsMu.Unlock()
+	}()
+
+	// Inicia streaming
+	openRouteClient := NewOpenRouteWrapper()
+	eventChan, err := openRouteClient.CallOpenRouterAPIStream(ctx, openRouteReq)
+	if err != nil {
+		respondError(w, http.StatusBadGateway, "failed to connect to AI provider", "Failed to connect to AI provider")
+		return
+	}
+
+	// Configura headers SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Desabilita buffering do nginx
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, "streaming not supported", "Streaming not supported")
+		return
+	}
+
+	// Processa eventos do stream
+	for event := range eventChan {
+		select {
+		case <-ctx.Done():
+			s.writeSSE(w, flusher, "error", `{"error":"connection closed"}`)
+			return
+		default:
+		}
+
+		if event.Error != nil {
+			respondError(w, http.StatusInternalServerError, "stream error", "Stream error: "+event.Error.Error())
+			s.writeSSE(w, flusher, "error", fmt.Sprintf(`{"error":"%s"}`, event.Error.Error()))
+			return
+		}
+
+		if event.Done {
+			s.writeSSE(w, flusher, "done", `{"status":"complete"}`)
+			return
+		}
+
+		if event.Chunk != nil {
+			chunkJSON, err := json.Marshal(event.Chunk)
+			if err != nil {
+				continue
+			}
+			s.writeSSE(w, flusher, "message", string(chunkJSON))
+		}
+	}
+}
+
+func (s *OrusAPI) HandleOpenRouteChatCredit(w http.ResponseWriter, r *http.Request) {	
+	openRouteClient := NewOpenRouteWrapper()
+	credits := openRouteClient.GetCurrentCredits()
+	respondJSON(w, http.StatusOK, credits)
+}
+
+func (s *OrusAPI) HandleWebSearch(w http.ResponseWriter, r *http.Request) {
+	var req WebSearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	ollamaClient := NewOllamaClient()
+	results, err := ollamaClient.WebSearch(req.Query, req.MaxResults)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to search web", "Failed to search web")
+		return
+	}
+	respondJSON(w, http.StatusOK, results)
+}
+
 // ==================== Helper Functions ====================
 
 func acquireChatRequest(body *LLMCloudRequestBody) *ChatRequest {
@@ -1059,6 +1193,43 @@ func acquireChatRequest(body *LLMCloudRequestBody) *ChatRequest {
 		chatRequest.Images = append(chatRequest.Images[:0], body.Images...)
 	}
 	return chatRequest
+}
+
+func (s *OrusAPI) CancelConnection(requestID string) bool {
+	s.activeConnsMu.Lock()
+	defer s.activeConnsMu.Unlock()
+
+	if cancel, exists := s.activeConns[requestID]; exists {
+		cancel()
+		delete(s.activeConns, requestID)
+		return true
+	}
+	return false
+}
+
+// CancelAllConnections cancela todas as conexões ativas
+func (s *OrusAPI) CancelAllConnections() int {
+	s.activeConnsMu.Lock()
+	defer s.activeConnsMu.Unlock()
+
+	count := len(s.activeConns)
+	for id, cancel := range s.activeConns {
+		cancel()
+		delete(s.activeConns, id)
+	}
+	return count
+}
+
+func (s *OrusAPI) writeSSE(w http.ResponseWriter, flusher http.Flusher, event, data string) {
+	fmt.Fprintf(w, "event: %s\n", event)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+}
+
+func (s *OrusAPI) jsonError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 

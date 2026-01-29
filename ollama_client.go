@@ -11,7 +11,18 @@ import (
 
 type OllamaClient struct {
 	baseURL    string
+	apiKey     string
 	httpClient *http.Client
+}
+
+type WebSearchResult struct {
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Content string `json:"content"`
+}
+
+type WebSearchResponse struct {
+	Results []WebSearchResult `json:"results"`
 }
 
 type PullModelProgress struct {
@@ -31,9 +42,17 @@ type ChatStreamResponse struct {
 	Completed int64     `json:"completed,omitempty"`
 }
 
-func NewOllamaClient(baseURL string) *OllamaClient {
+type WebSearchRequest struct {
+	Query string `json:"query"`
+	MaxResults int `json:"max_results"`
+}
+
+func NewOllamaClient() *OllamaClient {
+	apiKey := LoadEnv("OLLAMA_API_KEY")
+	baseURL := LoadEnv("ORUS_API_OLLAMA_BASE_URL")
 	return &OllamaClient{
 		baseURL: baseURL,
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 2000 * time.Second,
 		},
@@ -131,8 +150,9 @@ func (c *OllamaClient) Chat(req ChatRequest) (*ChatResponse, error) {
 }
 
 func (c *OllamaClient) ChatCloud(req ChatRequest) (*ChatResponse, error) {
+	
 	url := "https://ollama.com/api/chat"
-	ollamaAPIKey := LoadEnv("OLLAMA_API_KEY")
+	
 	jsonData, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("error serializing request: %w", err)
@@ -141,7 +161,7 @@ func (c *OllamaClient) ChatCloud(req ChatRequest) (*ChatResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+ollamaAPIKey)
+	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("error making request: %w", err)
@@ -225,7 +245,7 @@ func (c *OllamaClient) ChatStreamCloud(req ChatRequest, chatStreamProgressCallba
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer 52b8c58f60084191be50f9a6b609c60f.A-gkOw1rLduYusbeg2o8hOrL")
+	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("error making request: %w", err)
@@ -367,4 +387,48 @@ func (c *OllamaClient) PullModel(modelName string, progressCallback func(PullMod
 	}
 
 	return nil
+}
+
+func (c *OllamaClient) WebSearch(query string, maxResults int) (*WebSearchResponse, error) {
+	url := "https://ollama.com/api/web_search"
+
+
+	if maxResults <= 0 {
+		maxResults = 5
+	}
+	if maxResults > 10 {
+		maxResults = 10
+	}
+
+	reqData := map[string]interface{}{
+		"query":       query,
+		"max_results": maxResults,
+	}
+
+	jsonData, _ := json.Marshal(reqData)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("erro do servidor: status %d - %s", resp.StatusCode, string(body))
+	}
+
+	var searchResponse WebSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&searchResponse); err != nil {
+		return nil, fmt.Errorf("erro ao decodificar resposta: %w", err)
+	}
+
+	return &searchResponse, nil
 }
