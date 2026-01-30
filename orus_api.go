@@ -24,10 +24,10 @@ import (
 
 type OrusAPI struct {
 	*Orus
-	Port    string
-	router  *chi.Mux
-	Verbose bool
-	server  *http.Server
+	Port          string
+	router        *chi.Mux
+	Verbose       bool
+	server        *http.Server
 	activeConns   map[string]context.CancelFunc
 	activeConnsMu sync.RWMutex
 }
@@ -39,7 +39,6 @@ type PromptSignals struct {
 	ResponseMode  string `json:"responseMode"`
 	Result        string `json:"result"`
 }
-
 
 var (
 	bufferPool = sync.Pool{
@@ -153,9 +152,8 @@ func (s *OrusAPI) setupRoutes() {
 	s.router.Get("/prompt", s.IndexHandler)
 	s.router.Post("/prompt/llm-stream", s.PromptLLMStream)
 	s.router.Post("/orus-api/v2/openroute", s.HandleOpenRouteChatStream)
-	s.router.Post("/orus-api/v2/openroute-credit", s.HandleOpenRouteChatCredit)
+	s.router.Get("/orus-api/v2/openroute-credit", s.HandleOpenRouteChatCredit)
 	s.router.Post("/orus-api/v2/web-search", s.HandleWebSearch)
-
 
 	s.router.Get("/swagger/*", httpSwagger.Handler(
 		httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
@@ -345,10 +343,10 @@ func (s *OrusAPI) EmbedText(w http.ResponseWriter, r *http.Request) {
 
 	type Req struct {
 		Model string `json:"model"`
-		Text string `json:"text"`
+		Text  string `json:"text"`
 	}
 
-    request := new(Req)
+	request := new(Req)
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body: "+err.Error())
@@ -433,7 +431,7 @@ func (s *OrusAPI) OllamaPullModel(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 
-    request := new(Req)
+	request := new(Req)
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid_request", "Invalid JSON body: "+err.Error())
@@ -587,7 +585,7 @@ func (s *OrusAPI) CallLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-    data := request.Body["body"].(map[string]interface{})
+	data := request.Body["body"].(map[string]interface{})
 
 	modelVal, ok := data["model"]
 	if !ok {
@@ -740,8 +738,8 @@ func (s *OrusAPI) CallLLMCloud(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-    data := request.Body["body"].(map[string]interface{})
-	
+	data := request.Body["body"].(map[string]interface{})
+
 	modelVal, ok := data["model"]
 	if !ok {
 		respondError(w, http.StatusBadRequest, "missing_model", "Field 'model' is required")
@@ -1064,7 +1062,7 @@ func (s *OrusAPI) handleSyncResponseChi(ctx context.Context, w http.ResponseWrit
 
 func (s *OrusAPI) HandleOpenRouteChatStream(w http.ResponseWriter, r *http.Request) {
 	requestID := r.Context().Value("requestID").(string)
-	
+
 	// Parse do request
 	var req OpenRouteChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1095,12 +1093,12 @@ func (s *OrusAPI) HandleOpenRouteChatStream(w http.ResponseWriter, r *http.Reque
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	
+
 	// Registra conexão ativa
 	s.activeConnsMu.Lock()
 	s.activeConns[requestID] = cancel
 	s.activeConnsMu.Unlock()
-	
+
 	defer func() {
 		cancel()
 		s.activeConnsMu.Lock()
@@ -1159,7 +1157,7 @@ func (s *OrusAPI) HandleOpenRouteChatStream(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-func (s *OrusAPI) HandleOpenRouteChatCredit(w http.ResponseWriter, r *http.Request) {	
+func (s *OrusAPI) HandleOpenRouteChatCredit(w http.ResponseWriter, r *http.Request) {
 	openRouteClient := NewOpenRouteWrapper()
 	credits := openRouteClient.GetCurrentCredits()
 	respondJSON(w, http.StatusOK, credits)
@@ -1231,11 +1229,6 @@ func (s *OrusAPI) jsonError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
-
-
-
-
-
 
 // ---------------------------MAIN FUNCTION------------------------------
 

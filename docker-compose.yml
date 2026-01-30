@@ -6,16 +6,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
-      - ORUS_API_OLLAMA_BASE_URL=http://ollama:11434
-      - ORUS_API_AGENT_MEMORY_PATH=./agent_memory/
-      - ORUS_API_ONNX_RUNTIME_PATH=onnx/linux-x64/libonnxruntime.so
-      - EMBEDDING_MODEL=nomic-embed-text
-      - ORUS_API_ONNX_PATH=onnx/model.onnx
-      - ORUS_API_TOK_PATH=onnx/tokenizer.json
-      - ORUS_API_PORT=8081
-      # Variáveis de configuração do servidor removidas daqui
-      - OLLAMA_API_KEY=52b8c58f60084191be50f9a6b609c60f.A-gkOw1rLduYusbeg2o8hOrL
+    env_file:
+      - .env
     ports:
       - "8081:8081"
     volumes:
@@ -29,13 +21,13 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-      - /dev/kfd:/dev/kfd
+      - /dev/kfda:/dev/kfd
       - /dev/dri/:/dev/dri
     environment:
       - HSA_OVERRIDE_GFX_VERSION=10.3.0
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_NUM_PARALLEL=6
-      - OLLAMA_MAX_LOADED_MODELS=6
+      - OLLAMA_MAX_LOADED_MODELS=4
       - OLLAMA_KEEP_ALIVE=30m
       - OLLAMA_DEBUG=1
     restart: unless-stopped
