@@ -22,6 +22,12 @@ import (
 	_ "github.com/Dsouza10082/orus/docs"
 )
 
+type ContextKey string
+
+const (
+	RequestIDKey ContextKey = "requestID"
+)
+
 type OrusAPI struct {
 	*Orus
 	Port          string
@@ -122,12 +128,15 @@ func NewOrusAPI() *OrusAPI {
 		MaxHeaderBytes:    1 << 20,
 	}
 	return &OrusAPI{
-		Orus:    NewOrus(),
-		Port:    LoadEnv("ORUS_API_PORT"),
-		router:  router,
-		Verbose: false,
-		server:  server,
+		Orus:          NewOrus(),
+		Port:          LoadEnv("ORUS_API_PORT"),
+		router:        router,
+		Verbose:       false,
+		server:        server,
+		activeConns:   make(map[string]context.CancelFunc),
+		activeConnsMu: sync.RWMutex{},
 	}
+
 }
 
 func DefaultOpenRouteConfig() *OpenRouteConfig {
@@ -1061,7 +1070,11 @@ func (s *OrusAPI) handleSyncResponseChi(ctx context.Context, w http.ResponseWrit
 }
 
 func (s *OrusAPI) HandleOpenRouteChatStream(w http.ResponseWriter, r *http.Request) {
-	requestID := r.Context().Value("requestID").(string)
+
+	requestID, _ := r.Context().Value(middleware.RequestIDKey).(string)
+	if requestID == "" {
+		requestID = "unknown"
+	}
 
 	// Parse do request
 	var req OpenRouteChatRequest
