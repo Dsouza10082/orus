@@ -152,17 +152,29 @@ func DefaultOpenRouteConfig() *OpenRouteConfig {
 func (s *OrusAPI) setupRoutes() {
 	s.router.Get("/orus-api/v1/system-info", s.GetSystemInfo)
 	s.router.Post("/orus-api/v1/embed-text", s.EmbedText)
+	
+	s.router.Post("/orus-api/v2/health-check", s.HealthCheck)
+	s.router.Get("/prompt", s.IndexHandler)
+	
+	// Ollama routes
 	s.router.Get("/orus-api/v1/ollama-model-list", s.OllamaModelList)
 	s.router.Post("/orus-api/v1/ollama-pull-model", s.OllamaPullModel)
 	s.router.Post("/orus-api/v1/call-llm", s.CallLLM)
 	s.router.Post("/orus-api/v1/call-llm-cloud", s.CallLLMCloud)
 	s.router.Post("/orus-api/v2/call-llm", s.CallLLMOptimized)
-	s.router.Post("/orus-api/v2/health-check", s.HealthCheck)
-	s.router.Get("/prompt", s.IndexHandler)
+	s.router.Post("/orus-api/v2/web-search", s.HandleWebSearch)
 	s.router.Post("/prompt/llm-stream", s.PromptLLMStream)
+
+	// LMStudio routes
+	s.router.Post("/orus-api/v2/lmstudio-readyz", s.LMStudioChatHandler.ChatCompletions)
+	s.router.Get("/orus-api/v2/lmstudio-model-list", s.LMStudioChatHandler.ListModels)
+	s.router.Post("/orus-api/v2/lmstudio-call-llm", s.LMStudioChatHandler.ChatCompletions)
+	s.router.Post("/orus-api/v2/lmstudio-call-llm-stream", s.LMStudioChatHandler.ChatCompletionsStream)
+	s.router.Post("/orus-api/v2/lmstudio-call-llm-batch", s.LMStudioChatHandler.BatchChat)
+
+	// OpenRoute routes
 	s.router.Post("/orus-api/v2/openroute", s.HandleOpenRouteChatStream)
 	s.router.Get("/orus-api/v2/openroute-credit", s.HandleOpenRouteChatCredit)
-	s.router.Post("/orus-api/v2/web-search", s.HandleWebSearch)
 
 	s.router.Get("/swagger/*", httpSwagger.Handler(
 		httpSwagger.URL(fmt.Sprintf("http://localhost:%s/swagger/doc.json", s.Port)),
