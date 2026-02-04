@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
+	"time"
 
 	bge_m3 "github.com/Dsouza10082/go-bge-m3-embed"
 	"github.com/joho/godotenv"
@@ -14,9 +16,17 @@ type Orus struct {
 	BGEM3Embedder *bge_m3.GolangBGE3M3Embedder
 	OrusAPI       *OrusAPI
 	OllamaClient  *OllamaClient
+	LMStudioClient *LMStudioClient
+	LMStudioChatHandler *LMStudioChatHandler
 }
 
 func NewOrus() *Orus {
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+	
 	bge_m3_embedder := bge_m3.NewGolangBGE3M3Embedder().
 		SetMemoryPath(LoadEnv("ORUS_API_AGENT_MEMORY_PATH")).
 		SetTokPath(LoadEnv("ORUS_API_TOK_PATH")).
@@ -25,9 +35,38 @@ func NewOrus() *Orus {
 	bge_m3_embedder.EmbeddingModel.SetOnnxModelPath(LoadEnv("ORUS_API_ONNX_PATH"))
 	bge_m3_embedder.Verbose = true
 	ollamaClient := NewOllamaClient()
+
+	lmStudioCfg := LMStudioConfig{
+		BaseURL:                LoadEnv("LMSTUDIO_URL"),
+		MaxConcurrency:         16,
+		RequestTimeout:         5 * time.Minute,
+		MaxIdleConns:           32,
+		IdleConnTimeout:        90 * time.Second,
+		WorkerPoolSize: 8,
+		WorkerQueueSize:        128,
+	}
+
+	lmStudioClient := NewLMStudioClient(lmStudioCfg)
+
+	rateLimiter := NewAdaptiveRateLimiter(RateLimiterConfig{
+		InitialTokens: int64(lmStudioCfg.MaxConcurrency),
+		MaxTokens:     int64(lmStudioCfg.MaxConcurrency * 2),
+		RefillRate:    int64(lmStudioCfg.MaxConcurrency / 2),
+		MinRate:       2,
+		MaxRate:       int64(lmStudioCfg.MaxConcurrency),
+		AdaptInterval: 5 * time.Second,
+	})
+
+	rateLimiter.Start()
+	defer rateLimiter.Stop()
+
+	lmStudioChatHandler := NewLMStudioChatHandler(lmStudioClient, rateLimiter, logger)
+
 	return &Orus{
 		BGEM3Embedder: bge_m3_embedder,
 		OllamaClient: ollamaClient,
+		LMStudioClient: lmStudioClient,
+		LMStudioChatHandler: lmStudioChatHandler,
 	}
 }
 

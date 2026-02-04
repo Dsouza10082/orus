@@ -6,8 +6,20 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 8G
+        reservations:
+          cpus: "4"
+          memory: 8G
+    stdin_open: true
+    tty: true
     ports:
       - "8081:8081"
     volumes:
