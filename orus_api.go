@@ -171,6 +171,8 @@ func (s *OrusAPI) setupRoutes() {
 	s.router.Post("/orus-api/v2/lmstudio-call-llm", s.LMStudioChatHandler.ChatCompletions)
 	s.router.Post("/orus-api/v2/lmstudio-call-llm-stream", s.LMStudioChatHandler.ChatCompletionsStream)
 	s.router.Post("/orus-api/v2/lmstudio-call-llm-batch", s.LMStudioChatHandler.BatchChat)
+	s.router.Post("/orus-api/v2/lmstudio-pull-model", s.LMStudioChatHandler.PullModelHandler)
+	s.router.Get("/orus-api/v2/lmstudio/search?q=", s.LMStudioChatHandler.SearchModelsHandler)
 
 	// OpenRoute routes
 	s.router.Post("/orus-api/v2/openroute", s.HandleOpenRouteChatStream)

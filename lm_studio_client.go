@@ -23,6 +23,8 @@ type LMStudioClient struct {
 	metrics    *LMStudioMetrics
 	pool       *LMStudioWorkerPool
 	mu         sync.RWMutex
+	downloads   map[string]*DownloadProgress
+	downloadsMu sync.RWMutex
 }
 
 type LMStudioMetrics struct {
@@ -74,6 +76,7 @@ func NewLMStudioClient(cfg LMStudioConfig) *LMStudioClient {
 		},
 		semaphore: make(chan struct{}, cfg.MaxConcurrency),
 		metrics:   &LMStudioMetrics{},
+		downloads: make(map[string]*DownloadProgress),
 	}
 
 	c.pool = NewLMStudioWorkerPool(cfg.WorkerPoolSize, cfg.WorkerQueueSize)
@@ -244,3 +247,13 @@ func (c *LMStudioClient) Close() error {
 	c.httpClient.CloseIdleConnections()
 	return nil
 }
+
+
+func normalizeModelID(model string) string {
+	// Remove prefixos comuns
+	model = strings.TrimPrefix(model, "hf://")
+	model = strings.TrimPrefix(model, "huggingface://")
+	model = strings.TrimPrefix(model, "https://huggingface.co/")
+	return model
+}
+
