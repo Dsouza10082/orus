@@ -1322,6 +1322,123 @@ func (h *LMStudioChatHandler) ClearCompletedDownloads() int {
 	return count
 }
 
+
+func (c *LMStudioChatHandler) ModelLoadHandler(w http.ResponseWriter, r *http.Request) {
+	var req LMStudioLoadModelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	if req.Model == "" {
+		respondError(w, http.StatusBadRequest, "missing_model", "Model name is required")
+		return
+	}
+
+	c.logger.Info("Load model request",
+		"model", req.Model,
+		"context_size", req.ContextSize,
+		"gpu_layers", req.GPULayers,
+	)
+
+	if err := c.LoadModel(r.Context(), req); err != nil {
+		respondError(w, http.StatusInternalServerError, "load_failed", err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Model loaded successfully",
+		"model":   req.Model,
+	})
+}
+
+func (c *LMStudioChatHandler) LoadModel(ctx context.Context, req LMStudioLoadModelRequest) error {
+	body, err := json.Marshal(map[string]interface{}{
+		"model":        req.Model,
+		"context_size": req.ContextSize,
+		"gpu_layers":   req.GPULayers,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", 
+		c.client.baseURL+"/api/v0/models/load", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to load model: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to load model (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+func (c *LMStudioChatHandler) ModelUnloadHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	if req.Model == "" {
+		respondError(w, http.StatusBadRequest, "missing_model", "Model name is required")
+		return
+	}
+
+	c.logger.Info("Unload model request", "model", req.Model)
+
+	if err := c.UnloadModel(r.Context(), req.Model); err != nil {
+		respondError(w, http.StatusInternalServerError, "unload_failed", err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "Model unloaded successfully",
+		"model":   req.Model,
+	})
+}
+
+func (c *LMStudioChatHandler) UnloadModel(ctx context.Context, modelID string) error {
+	body, err := json.Marshal(map[string]string{"model": modelID})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", 
+		c.client.baseURL+"/api/v0/models/unload", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to unload model: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to unload model (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
 func (c *LMStudioChatHandler) SearchModelsHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	if query == "" {
