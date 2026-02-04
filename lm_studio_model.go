@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,6 +76,39 @@ type LMStudioWorkerPool struct {
 	tasksFailed    atomic.Int64
 }
 
+type LMStudioPullRequest struct {
+	Model       string `json:"model"`        // ID ou nome do modelo (ex: "TheBloke/Mistral-7B-Instruct-v0.2-GGUF")
+	Filename    string `json:"filename,omitempty"` // Arquivo específico (ex: "mistral-7b-instruct-v0.2.Q4_K_M.gguf")
+	Quantization string `json:"quantization,omitempty"` // Quantização preferida (ex: "Q4_K_M", "Q5_K_M", "Q8_0")
+}
+
+// PullResponse resposta do pull
+type LMStudioPullResponse struct {
+	Success  bool            `json:"success"`
+	Message  string          `json:"message"`
+	ModelID  string          `json:"model_id,omitempty"`
+	Progress *DownloadProgress `json:"progress,omitempty"`
+}
+
+type DownloadProgress struct {
+	ModelID        string    `json:"model_id"`
+	Status         string    `json:"status"` // pending, downloading, completed, failed
+	Progress       float64   `json:"progress"` // 0-100
+	BytesDownloaded int64    `json:"bytes_downloaded"`
+	TotalBytes     int64     `json:"total_bytes"`
+	Speed          string    `json:"speed,omitempty"`
+	ETA            string    `json:"eta,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	StartedAt      time.Time `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+}
+
+type LMStudioLoadModelRequest struct {
+	Model       string `json:"model"`
+	ContextSize int    `json:"context_size,omitempty"`
+	GPULayers   int    `json:"gpu_layers,omitempty"`
+}
+
 type AdaptiveRateLimiter struct {
 	tokens     atomic.Int64
 	maxTokens  int64
@@ -110,6 +145,22 @@ type RateLimiterConfig struct {
 	MinRate       int64
 	MaxRate       int64
 	AdaptInterval time.Duration
+}
+
+type HuggingFaceModel struct {
+	ID           string   `json:"id"`
+	ModelID      string   `json:"modelId"`
+	Author       string   `json:"author,omitempty"`
+	SHA          string   `json:"sha,omitempty"`
+	LastModified string   `json:"lastModified,omitempty"`
+	Private      bool     `json:"private"`
+	Disabled     bool     `json:"disabled,omitempty"`
+	Gated        bool     `json:"gated,omitempty"`
+	Downloads    int      `json:"downloads"`
+	Likes        int      `json:"likes"`
+	Tags         []string `json:"tags,omitempty"`
+	PipelineTag  string   `json:"pipeline_tag,omitempty"`
+	LibraryName  string   `json:"library_name,omitempty"`
 }
 
 func DefaultRateLimiterConfig() RateLimiterConfig {
@@ -1028,4 +1079,411 @@ func (api *LMStudioChatHandler) writeSSEError(w http.ResponseWriter, flusher htt
 	fmt.Fprintf(w, "data: %s\n\n", string(errData))
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+}
+
+func (c *LMStudioChatHandler) PullModelHandler(w http.ResponseWriter, r *http.Request) {
+	var req LMStudioPullRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
+	if req.Model == "" {
+		respondError(w, http.StatusBadRequest, "missing_model", "Model name is required")
+		return
+	}
+
+	c.logger.Info("Pull model request",
+		"model", req.Model,
+		"filename", req.Filename,
+		"quantization", req.Quantization,
+	)
+
+	resp, err := c.PullModel(r.Context(), req)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "pull_failed", err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, resp)
+}
+
+func (c *LMStudioChatHandler) PullModel(ctx context.Context, req LMStudioPullRequest) (*LMStudioPullResponse, error) {
+	// Normaliza o nome do modelo
+	modelID := normalizeModelID(req.Model)
+	
+	// Verifica se já está baixando
+	c.client.downloadsMu.RLock()
+	if progress, exists := c.client.downloads[modelID]; exists {
+		c.client.downloadsMu.RUnlock()
+		return &LMStudioPullResponse{
+			Success:  true,
+			Message:  "Download already in progress",
+			ModelID:  modelID,
+			Progress: progress,
+		}, nil
+	}
+	c.client.downloadsMu.RUnlock()
+
+	// Inicia tracking do download
+	progress := &DownloadProgress{
+		ModelID:   modelID,
+		Status:    "pending",
+		Progress:  0,
+		StartedAt: time.Now(),
+	}
+
+	c.client.downloadsMu.Lock()
+	c.client.downloads[modelID] = progress
+	c.client.downloadsMu.Unlock()
+
+	// Tenta diferentes métodos de pull
+	
+	// Método 1: API interna do LM Studio (se disponível)
+	if err := c.pullViaLMStudioAPI(ctx, req, progress); err == nil {
+		return &LMStudioPullResponse{
+			Success:  true,
+			Message:  "Download started via LM Studio API",
+			ModelID:  modelID,
+			Progress: progress,
+		}, nil
+	}
+
+	go c.pullFromHuggingFace(context.Background(), req, progress)
+
+	return &LMStudioPullResponse{
+		Success:  true,
+		Message:  "Download started via Hugging Face",
+		ModelID:  modelID,
+		Progress: progress,
+	}, nil
+}
+
+func (c *LMStudioChatHandler) pullViaLMStudioAPI(ctx context.Context, req LMStudioPullRequest, progress *DownloadProgress) error {
+	// LM Studio pode ter endpoint para download de modelos
+	// Endpoint típico: POST /api/v0/models/download
+	
+	body, err := json.Marshal(map[string]interface{}{
+		"model":        req.Model,
+		"filename":     req.Filename,
+		"quantization": req.Quantization,
+	})
+	if err != nil {
+		return err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", 
+		c.client.baseURL+"/api/v0/models/download", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("LM Studio API not available for downloads")
+	}
+
+	progress.Status = "downloading"
+	return nil
+}
+
+func (mm *LMStudioChatHandler) pullFromHuggingFace(ctx context.Context, req LMStudioPullRequest, progress *DownloadProgress) {
+	progress.Status = "downloading"
+	
+	// Constrói URL do Hugging Face
+	hfURL := buildHuggingFaceURL(req)
+	
+	// Cria request com suporte a progresso
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", hfURL, nil)
+	if err != nil {
+		progress.Status = "failed"
+		progress.Error = err.Error()
+		return
+	}
+
+	// Cliente com timeout maior para downloads
+	client := &http.Client{Timeout: 0} // Sem timeout para downloads grandes
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		progress.Status = "failed"
+		progress.Error = err.Error()
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		progress.Status = "failed"
+		progress.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return
+	}
+
+	progress.TotalBytes = resp.ContentLength
+
+	// Lê com tracking de progresso
+	// Em produção, salvaria no diretório de modelos do LM Studio
+	var downloaded int64
+	buf := make([]byte, 32*1024) // 32KB buffer
+	
+	startTime := time.Now()
+	
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			downloaded += int64(n)
+			progress.BytesDownloaded = downloaded
+			
+			if progress.TotalBytes > 0 {
+				progress.Progress = float64(downloaded) / float64(progress.TotalBytes) * 100
+			}
+			
+			// Calcula velocidade
+			elapsed := time.Since(startTime).Seconds()
+			if elapsed > 0 {
+				speed := float64(downloaded) / elapsed
+				progress.Speed = formatBytes(int64(speed)) + "/s"
+				
+				if progress.TotalBytes > 0 && speed > 0 {
+					remaining := float64(progress.TotalBytes-downloaded) / speed
+					progress.ETA = formatDuration(time.Duration(remaining) * time.Second)
+				}
+			}
+		}
+		
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			progress.Status = "failed"
+			progress.Error = err.Error()
+			return
+		}
+	}
+
+	now := time.Now()
+	progress.Status = "completed"
+	progress.Progress = 100
+	progress.CompletedAt = &now
+}
+
+// GetDownloadProgress retorna o progresso de um download
+func (h *LMStudioChatHandler) GetDownloadProgress(modelID string) (*DownloadProgress, bool) {
+	h.client.downloadsMu.RLock()
+	defer h.client.downloadsMu.RUnlock()
+	
+	progress, exists := h.client.downloads[normalizeModelID(modelID)]
+	return progress, exists
+}
+
+// GetAllDownloads retorna todos os downloads
+func (h *LMStudioChatHandler) GetAllDownloads() map[string]*DownloadProgress {
+	h.client.downloadsMu.RLock()
+	defer h.client.downloadsMu.RUnlock()
+	
+	result := make(map[string]*DownloadProgress)
+	for k, v := range h.client.downloads {
+		result[k] = v
+	}
+	return result
+}
+
+// CancelDownload cancela um download em progresso
+func (h *LMStudioChatHandler) CancelDownload(modelID string) bool {
+	h.client.downloadsMu.Lock()
+	defer h.client.downloadsMu.Unlock()
+	
+	normalizedID := normalizeModelID(modelID)
+	if progress, exists := h.client.downloads[normalizedID]; exists {
+		if progress.Status == "downloading" || progress.Status == "pending" {
+			progress.Status = "cancelled"
+			return true
+		}
+	}
+	return false
+}
+
+// ClearCompletedDownloads limpa downloads concluídos do cache
+func (h *LMStudioChatHandler) ClearCompletedDownloads() int {
+	h.client.downloadsMu.Lock()
+	defer h.client.downloadsMu.Unlock()
+	
+	count := 0
+	for id, progress := range h.client.downloads {
+		if progress.Status == "completed" || progress.Status == "failed" || progress.Status == "cancelled" {
+			delete(h.client.downloads, id)
+			count++
+		}
+	}
+	return count
+}
+
+func (c *LMStudioChatHandler) SearchModelsHandler(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		query = r.URL.Query().Get("query")
+	}
+	if query == "" {
+		respondError(w, http.StatusBadRequest, "missing_query", "Query parameter 'q' is required")
+		return
+	}
+
+	// Limit opcional
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+		if limit <= 0 || limit > 100 {
+			limit = 20
+		}
+	}
+
+	models, err := c.SearchModels(r.Context(), query, limit)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "search_failed", err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"object": "list",
+		"query":  query,
+		"count":  len(models),
+		"data":   models,
+	})
+}
+
+
+func (h *LMStudioChatHandler) SearchModels(ctx context.Context, query string, limit int) ([]HuggingFaceModel, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	// API do Hugging Face
+	apiURL := fmt.Sprintf(
+		"https://huggingface.co/api/models?search=%s&filter=gguf&sort=downloads&direction=-1&limit=%d",
+		url.QueryEscape(query),
+		limit,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := h.client.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search models: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Hugging Face API error: %d", resp.StatusCode)
+	}
+
+	var models []HuggingFaceModel
+	if err := json.NewDecoder(resp.Body).Decode(&models); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return models, nil
+}
+
+func (h *LMStudioChatHandler) GetModelFiles(ctx context.Context, modelID string) ([]HuggingFaceFile, error) {
+	apiURL := fmt.Sprintf("https://huggingface.co/api/models/%s", url.PathEscape(modelID))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := h.client.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get model info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("model not found: %s", modelID)
+	}
+
+	var modelInfo struct {
+		Siblings []HuggingFaceFile `json:"siblings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&modelInfo); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Filtra apenas arquivos GGUF
+	var ggufFiles []HuggingFaceFile
+	for _, f := range modelInfo.Siblings {
+		if strings.HasSuffix(strings.ToLower(f.Filename), ".gguf") {
+			ggufFiles = append(ggufFiles, f)
+		}
+	}
+
+	return ggufFiles, nil
+}
+
+// HuggingFaceFile arquivo no Hugging Face
+type HuggingFaceFile struct {
+	Filename string `json:"rfilename"`
+	Size     int64  `json:"size,omitempty"`
+	BlobID   string `json:"blobId,omitempty"`
+	LFS      *struct {
+		Size        int64  `json:"size"`
+		SHA256      string `json:"sha256"`
+		PointerSize int    `json:"pointerSize"`
+	} `json:"lfs,omitempty"`
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+func buildHuggingFaceURL(req LMStudioPullRequest) string {
+	model := normalizeModelID(req.Model)
+	filename := req.Filename
+	
+	// Se não especificou arquivo, tenta inferir
+	if filename == "" {
+		// Usa quantização padrão Q4_K_M se não especificada
+		quant := req.Quantization
+		if quant == "" {
+			quant = "Q4_K_M"
+		}
+		// Extrai nome base do modelo
+		parts := strings.Split(model, "/")
+		baseName := parts[len(parts)-1]
+		baseName = strings.TrimSuffix(baseName, "-GGUF")
+		baseName = strings.ToLower(baseName)
+		filename = fmt.Sprintf("%s.%s.gguf", baseName, quant)
+	}
+	
+	return fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", model, filename)
+}
+
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
